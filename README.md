@@ -47,6 +47,7 @@ flags are present.
   is introduced.
 - `src/main.cpp`: thin command-line entrypoint.
 - `cmake/`: target-scoped compiler warning configuration.
+- `tests/`: CTest CLI checks and a core version check, without a test framework.
 
 Existing local `lab4/` and `lab5/` coursework is separate from FluxCrawl and is
 not included in its build.
