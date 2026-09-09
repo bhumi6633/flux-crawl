@@ -7,10 +7,14 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(cmake/CompilerWarnings.cmake)
 
-add_library(fluxcrawl_core INTERFACE)
+find_package(CURL 7.62 REQUIRED)
+
+add_library(fluxcrawl_core src/url.cpp)
 add_library(FluxCrawl::core ALIAS fluxcrawl_core)
-target_include_directories(fluxcrawl_core INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/include")
-target_compile_features(fluxcrawl_core INTERFACE cxx_std_20)
+target_include_directories(fluxcrawl_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_compile_features(fluxcrawl_core PUBLIC cxx_std_20)
+target_link_libraries(fluxcrawl_core PRIVATE CURL::libcurl)
+fluxcrawl_enable_warnings(fluxcrawl_core)
 
 add_executable(fluxcrawl src/main.cpp)
 target_link_libraries(fluxcrawl PRIVATE FluxCrawl::core)
