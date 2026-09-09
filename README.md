@@ -5,15 +5,17 @@ the same crawling workload with threaded blocking I/O and event-driven
 asynchronous I/O.
 
 **Under development.** The project provides build infrastructure, version
-information, a minimal CLI, and an HTTP/HTTPS URL value type. The planned thread-pool backend
+information, a minimal CLI, an HTTP/HTTPS URL value type, and HTML anchor link
+extraction. The planned thread-pool backend
 and single-threaded libcurl `curl_multi` backend are not implemented. There is
-no HTTP fetching, HTML parsing, crawling, or benchmark data yet.
+no HTTP fetching, crawling, or benchmark data yet.
 
 ## Build
 
 Requires CMake 3.20 or newer, a C++20 compiler, and libcurl 7.62 or newer with
-development headers. On Debian/Ubuntu, install `libcurl4-openssl-dev`; the macOS
-Command Line Tools SDK includes libcurl. Only libcurl's URL API is used; URL
+development headers, plus libxml2 development headers. On Debian/Ubuntu, install
+`libcurl4-openssl-dev libxml2-dev`; the macOS Command Line Tools SDK includes both.
+Only libcurl's URL API is used; URL
 operations do not initialize a network client or make requests.
 
 ```bash
@@ -73,10 +75,44 @@ IPv6 host accessors include brackets. No DNS lookup or host reachability check
 is performed; host existence is not a parsing invariant. IDNA conversion and
 additional deduplication policies remain future decisions.
 
+## HTML link extraction
+
+```cpp
+#include <fluxcrawl/html_parser.hpp>
+
+const auto base = fluxcrawl::Url::parse("https://example.com/docs/index.html");
+if (base) {
+    const auto links = fluxcrawl::HtmlLinkExtractor{}.extract_links(
+        R"(<a href="../pricing">Pricing</a>)", *base);
+    // links contains https://example.com/pricing
+}
+```
+
+The stateless extractor parses bytes already in memory with libxml2's HTML parser
+and selects `//a/@href` using XPath. It decodes HTML entities, trims surrounding
+HTML whitespace, and delegates each reference to `Url::resolve`. Canonical URL
+equality/hashing removes duplicates within this document while a vector preserves
+first-seen document order. Empty hrefs and fragment-only links resolve to the
+caller's base resource. Invalid and unsupported URLs are skipped.
+
+Recoverable malformed HTML is accepted with parser diagnostics suppressed per
+parse. Empty input, failure to build a document, and input exceeding libxml2's
+`int` length limit return an empty vector. Normal libxml2 resource limits remain
+enabled. Documents, XPath contexts/results, and decoded attribute strings use
+RAII ownership; no process-wide cleanup or diagnostic hooks are changed.
+
+The memory-only HTML API uses `HTML_PARSE_NONET`, does not load external DTDs or
+entities, and performs no fetching. The caller's base URL is authoritative:
+`<base>` and non-anchor resource attributes are ignored. Encoding detection is
+left to libxml2 (including document declarations); HTTP charset metadata is not
+part of this API yet. This is libxml2 HTML recovery, not a browser HTML5 DOM.
+There is no same-domain filtering, crawler-wide deduplication, or scheduling.
+
 ## Layout
 
-- `include/fluxcrawl/`: public version and URL headers.
+- `include/fluxcrawl/`: public version, URL, and HTML extractor headers.
 - `src/url.cpp`: URL implementation in the compiled `fluxcrawl_core` library.
+- `src/html_parser.cpp`: libxml2 HTML extraction, also in `fluxcrawl_core`.
 - `src/main.cpp`: thin command-line entrypoint.
 - `cmake/`: target-scoped compiler warning configuration.
 - `tests/`: CTest CLI, version, and URL checks, without a test framework.

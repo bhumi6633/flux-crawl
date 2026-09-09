@@ -12,8 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install URL parsing dependency
-        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
+      - name: Install parsing dependencies
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev libxml2-dev
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
       - name: Build
