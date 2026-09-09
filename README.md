@@ -37,8 +37,9 @@ select the configuration using `cmake --build build --config Debug` and
 
 The version is defined in `include/fluxcrawl/version.hpp`. Help and version
 requests exit successfully; invalid options, missing or extra seed arguments,
-and crawl requests exit with status 1. A seed argument produces the message
-`crawl engine not implemented yet` and performs no network activity. Arguments
+and crawl requests exit with status 1. Seed arguments are validated with `Url`;
+invalid or unsupported URLs produce `invalid or unsupported seed URL`. A valid
+seed produces `crawl engine not implemented yet` and performs no network activity. Arguments
 are checked before displaying help or version; help takes precedence if both
 flags are present.
 

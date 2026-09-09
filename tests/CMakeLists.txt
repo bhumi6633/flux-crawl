@@ -9,7 +9,7 @@ fluxcrawl_enable_warnings(fluxcrawl_url_test)
 add_test(NAME core.url COMMAND fluxcrawl_url_test)
 set_tests_properties(core.url PROPERTIES TIMEOUT 10)
 
-foreach(case IN ITEMS help version invalid help_invalid seed missing extra_seed)
+foreach(case IN ITEMS help version invalid help_invalid seed normalized_seed invalid_seed unsupported_seed missing extra_seed)
     add_test(NAME cli.${case}
         COMMAND "${CMAKE_COMMAND}"
             "-DFLUXCRAWL=$<TARGET_FILE:fluxcrawl>"

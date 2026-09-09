@@ -1,4 +1,5 @@
 #include <fluxcrawl/version.hpp>
+#include <fluxcrawl/url.hpp>
 
 #include <iostream>
 #include <string_view>
@@ -22,7 +23,7 @@ int main(int argc, char* argv[])
 {
     bool show_help = false;
     bool show_version = false;
-    bool has_seed = false;
+    std::string_view seed;
 
     for (int index = 1; index < argc; ++index) {
         const std::string_view argument{argv[index]};
@@ -34,11 +35,11 @@ int main(int argc, char* argv[])
             std::cerr << "fluxcrawl: unknown option '" << argument
                       << "'. Use --help for usage.\n";
             return 1;
-        } else if (argument.empty() || has_seed) {
+        } else if (argument.empty() || !seed.empty()) {
             std::cerr << "fluxcrawl: expected one non-empty seed URL. Use --help for usage.\n";
             return 1;
         } else {
-            has_seed = true;
+            seed = argument;
         }
     }
 
@@ -50,7 +51,11 @@ int main(int argc, char* argv[])
         std::cout << "FluxCrawl " << fluxcrawl::version << '\n';
         return 0;
     }
-    if (has_seed) {
+    if (!seed.empty()) {
+        if (!fluxcrawl::Url::parse(seed)) {
+            std::cerr << "fluxcrawl: invalid or unsupported seed URL; expected a valid HTTP/HTTPS URL.\n";
+            return 1;
+        }
         std::cerr << "fluxcrawl: crawl engine not implemented yet.\n";
         return 1;
     }
