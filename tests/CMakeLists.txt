@@ -9,6 +9,13 @@ fluxcrawl_enable_warnings(fluxcrawl_url_test)
 add_test(NAME core.url COMMAND fluxcrawl_url_test)
 set_tests_properties(core.url PROPERTIES TIMEOUT 10)
 
+add_executable(fluxcrawl_html_parser_test html_parser_test.cpp)
+# libxml2 is linked here only for the test's external-resource loader guard.
+target_link_libraries(fluxcrawl_html_parser_test PRIVATE FluxCrawl::core LibXml2::LibXml2)
+fluxcrawl_enable_warnings(fluxcrawl_html_parser_test)
+add_test(NAME core.html_parser COMMAND fluxcrawl_html_parser_test)
+set_tests_properties(core.html_parser PROPERTIES TIMEOUT 10)
+
 foreach(case IN ITEMS help version invalid help_invalid seed normalized_seed invalid_seed unsupported_seed missing extra_seed)
     add_test(NAME cli.${case}
         COMMAND "${CMAKE_COMMAND}"

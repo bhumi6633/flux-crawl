@@ -115,7 +115,9 @@ There is no same-domain filtering, crawler-wide deduplication, or scheduling.
 - `src/html_parser.cpp`: libxml2 HTML extraction, also in `fluxcrawl_core`.
 - `src/main.cpp`: thin command-line entrypoint.
 - `cmake/`: target-scoped compiler warning configuration.
-- `tests/`: CTest CLI, version, and URL checks, without a test framework.
+- `tests/`: offline CTest CLI, version, URL, and HTML extraction checks, without
+  a test framework. HTML tests block external resource loading with a test-only
+  guard and exercise malformed markup, entities, ordering, and deduplication.
 
 Existing local `lab4/` and `lab5/` coursework is separate from FluxCrawl and is
 not included in its build.
