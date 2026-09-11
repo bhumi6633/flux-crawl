@@ -10,7 +10,11 @@ include(cmake/CompilerWarnings.cmake)
 find_package(CURL 7.62 REQUIRED)
 find_package(LibXml2 REQUIRED)
 
-add_library(fluxcrawl_core src/url.cpp src/html_parser.cpp)
+add_library(fluxcrawl_core
+    src/url.cpp
+    src/html_parser.cpp
+    src/crawl_frontier.cpp
+    src/crawl_state.cpp)
 add_library(FluxCrawl::core ALIAS fluxcrawl_core)
 target_include_directories(fluxcrawl_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_compile_features(fluxcrawl_core PUBLIC cxx_std_20)
