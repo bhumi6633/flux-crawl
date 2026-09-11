@@ -16,6 +16,12 @@ fluxcrawl_enable_warnings(fluxcrawl_html_parser_test)
 add_test(NAME core.html_parser COMMAND fluxcrawl_html_parser_test)
 set_tests_properties(core.html_parser PROPERTIES TIMEOUT 10)
 
+add_executable(fluxcrawl_crawl_state_test crawl_state_test.cpp)
+target_link_libraries(fluxcrawl_crawl_state_test PRIVATE FluxCrawl::core)
+fluxcrawl_enable_warnings(fluxcrawl_crawl_state_test)
+add_test(NAME core.crawl_state COMMAND fluxcrawl_crawl_state_test)
+set_tests_properties(core.crawl_state PROPERTIES TIMEOUT 10)
+
 foreach(case IN ITEMS help version invalid help_invalid seed normalized_seed invalid_seed unsupported_seed missing extra_seed)
     add_test(NAME cli.${case}
         COMMAND "${CMAKE_COMMAND}"

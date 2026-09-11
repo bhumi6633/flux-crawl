@@ -6,7 +6,8 @@ asynchronous I/O.
 
 **Under development.** The project provides build infrastructure, version
 information, a minimal CLI, an HTTP/HTTPS URL value type, and HTML anchor link
-extraction. The planned thread-pool backend
+extraction, plus in-memory FIFO crawl state and global discovery deduplication.
+The planned thread-pool backend
 and single-threaded libcurl `curl_multi` backend are not implemented. There is
 no HTTP fetching, crawling, or benchmark data yet.
 
@@ -108,16 +109,60 @@ left to libxml2 (including document declarations); HTTP charset metadata is not
 part of this API yet. This is libxml2 HTML recovery, not a browser HTML5 DOM.
 There is no same-domain filtering, crawler-wide deduplication, or scheduling.
 
+## Crawl state
+
+`CrawlItem` holds a `Url` and a `std::size_t depth`; it lives alongside the small
+`CrawlFrontier` API in `crawl_frontier.hpp`. The frontier uses a deque with
+`push(CrawlItem)`, `pop()`, `size()`, and `empty()`. Empty pops return `std::nullopt`.
+The standalone frontier applies no deduplication or depth policy.
+
+`CrawlState(Url seed, std::size_t max_depth)` owns a frontier, an exact
+`std::unordered_set<Url>` of seen resources, and an inclusive depth limit. Its API:
+
+- `next()`: remove the oldest queued item, or return `std::nullopt`.
+- `discover(url, depth)`: accept new work within the depth limit; return `false`
+  for duplicates or excessive depth without changing state.
+- `discover_from(parent, url)`: discover at `parent.depth + 1`, checking the limit
+  before addition to avoid overflow.
+- `has_seen(url)`, `seen_count()`, `frontier_size()`, and `empty()`: inspect state.
+
+The seed is automatically queued and marked seen at depth 0. Its children have
+depth 1, and their children depth 2. A maximum of 2 permits depths 0 through 2;
+a maximum of 0 permits only seed-depth work. Rejected over-depth URLs are not
+marked seen and may be accepted later at a valid depth.
+
+Marking URLs seen at acceptance prevents two pages from queueing the same pending
+resource. Canonical URL equality/hashing governs duplicates across the entire
+state, including after an item is popped. First discovery wins: rediscovery does
+not requeue work or revise its depth. Enqueue allocation failures roll back the
+seen insertion before propagating the exception.
+
+FIFO gives deterministic BFS when callers expand items in queue order. For
+`A -> [B,C,D]`, `B -> [E,F]`, and `C -> [G]`, processing order is
+`A,B,C,D,E,F,G`. Explicit depths and parent items are supplied by the caller;
+the state does not validate parent provenance or enforce shortest-path updates.
+Parser output composes by passing each extracted `Url` to `discover_from`; the
+state has no dependency on the parser and no same-domain restriction.
+
+These classes are single-threaded. `empty()` means the frontier has no queued
+items, not that popped work has finished. Future engines must account for
+in-flight work, synchronization, and concurrent completion order separately.
+No networking, completed-request tracking, or production crawl loop is included.
+
 ## Layout
 
 - `include/fluxcrawl/`: public version, URL, and HTML extractor headers.
 - `src/url.cpp`: URL implementation in the compiled `fluxcrawl_core` library.
 - `src/html_parser.cpp`: libxml2 HTML extraction, also in `fluxcrawl_core`.
+- `include/fluxcrawl/crawl_frontier.hpp` and `crawl_state.hpp`: public crawl work
+  and state APIs, implemented by the corresponding `.cpp` files in `src/`.
 - `src/main.cpp`: thin command-line entrypoint.
 - `cmake/`: target-scoped compiler warning configuration.
 - `tests/`: offline CTest CLI, version, URL, and HTML extraction checks, without
   a test framework. HTML tests block external resource loading with a test-only
   guard and exercise malformed markup, entities, ordering, and deduplication.
+  Crawl-state tests cover FIFO/BFS, depth boundaries, discovery-time deduplication,
+  and composition with in-memory parser results.
 
 Existing local `lab4/` and `lab5/` coursework is separate from FluxCrawl and is
 not included in its build.
