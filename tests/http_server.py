@@ -14,9 +14,46 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        self.server.requests.append(self.path)
         status, body, content_type = 200, b"hello", "text/plain"
         headers = {}
-        if self.path == "/html":
+        if self.path.startswith("/crawl/"):
+            content_type = "text/html; charset=UTF-8"
+            graph = {
+                "/crawl/": ["/crawl/a", "/crawl/b", "/crawl/shared", "/crawl/redirect-start"],
+                "/crawl/a": ["/crawl/deep", "/crawl/shared#one"],
+                "/crawl/b": ["/crawl/shared#two", "/crawl/"],
+                "/crawl/shared": [], "/crawl/deep": [],
+                "/crawl/redirected/index.html": ["child.html"],
+                "/crawl/redirected/child.html": [],
+                "/crawl/failures": [self.server.unavailable, "/crawl/not-found", "/crawl/error",
+                                    "/crawl/plain", "/crawl/binary", "/crawl/no-type", "/crawl/malformed"],
+                "/crawl/after": [],
+                "/crawl/host-policy": [f"http://localhost:{self.server.server_port}/crawl/shared",
+                                       self.server.unavailable, "/crawl/shared"],
+            }
+            if self.path in graph:
+                body = "".join(f"<a href='{link}'>Link</a>" for link in graph[self.path]).encode()
+            elif self.path == "/crawl/redirect-start":
+                status, body = 302, b"redirect"
+                headers["Location"] = "/crawl/redirected/index.html"
+            elif self.path == "/crawl/malformed":
+                body = b"<html><body><a href='/crawl/after'>After"
+            else:
+                body = b"<a href='/crawl/evil'>Must not discover</a>"
+                if self.path == "/crawl/not-found":
+                    status = 404
+                elif self.path == "/crawl/error":
+                    status = 503
+                elif self.path == "/crawl/plain":
+                    content_type = "text/plain"
+                elif self.path == "/crawl/binary":
+                    content_type = "application/octet-stream"
+                elif self.path == "/crawl/no-type":
+                    content_type = None
+                else:
+                    status = 404
+        elif self.path == "/html":
             body, content_type = b"<a href='next'>Next</a>", "text/html; charset=UTF-8"
         elif self.path == "/not-found":
             status, body = 404, b"not found"
@@ -73,6 +110,8 @@ def main():
     # Hold a bound, non-listening socket so the refusal port cannot be stolen.
     with socket.socket() as refused, HTTPServer(("127.0.0.1", 0), Handler) as server:
         refused.bind(("127.0.0.1", 0))
+        server.requests = []
+        server.unavailable = f"http://127.0.0.1:{refused.getsockname()[1]}/"
         server.timeout = 0.05
         environment = {key: value for key, value in os.environ.items()
                        if key.lower() not in ("http_proxy", "https_proxy", "all_proxy", "no_proxy")}

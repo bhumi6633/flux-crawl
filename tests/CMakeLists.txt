@@ -30,6 +30,13 @@ add_test(NAME core.http_client COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/http_server.py" "$<TARGET_FILE:fluxcrawl_http_client_test>")
 set_tests_properties(core.http_client PROPERTIES TIMEOUT 30)
 
+add_executable(fluxcrawl_sequential_crawler_test sequential_crawler_test.cpp)
+target_link_libraries(fluxcrawl_sequential_crawler_test PRIVATE FluxCrawl::core)
+fluxcrawl_enable_warnings(fluxcrawl_sequential_crawler_test)
+add_test(NAME core.sequential_crawler COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/http_server.py" "$<TARGET_FILE:fluxcrawl_sequential_crawler_test>")
+set_tests_properties(core.sequential_crawler PROPERTIES TIMEOUT 30)
+
 foreach(case IN ITEMS help version invalid help_invalid seed normalized_seed invalid_seed unsupported_seed missing extra_seed)
     add_test(NAME cli.${case}
         COMMAND "${CMAKE_COMMAND}"
