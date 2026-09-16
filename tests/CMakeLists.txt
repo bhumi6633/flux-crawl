@@ -48,7 +48,11 @@ add_test(NAME cli.crawl COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/http_server.py" "$<TARGET_FILE:fluxcrawl>" --crawl-cli)
 set_tests_properties(cli.crawl PROPERTIES TIMEOUT 30)
 
-foreach(case IN ITEMS help version invalid help_invalid seed normalized_seed invalid_seed unsupported_seed missing extra_seed bad_depth negative_pages overflow_depth missing_value)
+add_test(NAME cli.threaded COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/http_server.py" "$<TARGET_FILE:fluxcrawl>" --threaded-cli)
+set_tests_properties(cli.threaded PROPERTIES TIMEOUT 30)
+
+foreach(case IN ITEMS help version invalid help_invalid seed normalized_seed invalid_seed unsupported_seed missing extra_seed bad_depth negative_pages overflow_depth missing_value bad_engine missing_engine zero_workers negative_workers overflow_workers missing_workers irrelevant_workers)
     add_test(NAME cli.${case}
         COMMAND "${CMAKE_COMMAND}"
             "-DFLUXCRAWL=$<TARGET_FILE:fluxcrawl>"

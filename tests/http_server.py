@@ -176,10 +176,14 @@ def main():
         environment["NO_PROXY"] = "*"
         command = [sys.argv[1], f"http://127.0.0.1:{server.server_port}",
                    f"http://127.0.0.1:{refused.getsockname()[1]}"]
-        cli_mode = len(sys.argv) > 2 and sys.argv[2] == "--crawl-cli"
+        threaded_cli = len(sys.argv) > 2 and sys.argv[2] == "--threaded-cli"
+        cli_mode = len(sys.argv) > 2 and sys.argv[2] in ("--crawl-cli", "--threaded-cli")
         if cli_mode:
-            command = [sys.argv[1], "--depth", "2", "--max-pages", "20",
+            command = [sys.argv[1], "--engine", "threaded" if threaded_cli else "sequential",
+                       "--depth", "3", "--max-pages", "50",
                        f"http://127.0.0.1:{server.server_port}/crawl/"]
+            if threaded_cli:
+                command += ["--workers", "4"]
             print("Running:", " ".join(command), flush=True)
         with subprocess.Popen(command, env=environment, stdout=subprocess.PIPE if cli_mode else None,
                               text=True) as child:
@@ -193,11 +197,19 @@ def main():
                     output = child.communicate()[0]
                     print(output, end="")
                     for line in ("Pages attempted: 7\n", "Responses: 7\n", "Fetch failures: 0\n",
-                                 "URLs discovered: 7\n", "URLs pending: 0\n", "HTML pages processed: 5\n"):
+                                 "URLs discovered: 7\n", "URLs pending: 0\n", "HTML pages processed: 7\n"):
                         assert line in output, output
-                    assert server.requests == ["/crawl/", "/crawl/a", "/crawl/b", "/crawl/shared",
-                                               "/crawl/redirect-start", "/crawl/redirected/index.html",
-                                               "/crawl/deep", "/crawl/redirected/child.html"], server.requests
+                    expected = ["/crawl/", "/crawl/a", "/crawl/b", "/crawl/shared",
+                                "/crawl/redirect-start", "/crawl/redirected/index.html",
+                                "/crawl/deep", "/crawl/redirected/child.html"]
+                    with server.lock:
+                        actual = list(server.requests)
+                    if threaded_cli:
+                        assert "Engine: threaded\nWorkers: 4\n" in output
+                        assert Counter(actual) == Counter(expected), actual
+                    else:
+                        assert "Engine: sequential\n" in output
+                        assert actual == expected, actual
                 return child.returncode
             finally:
                 if child.poll() is None:

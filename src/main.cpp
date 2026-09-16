@@ -1,6 +1,7 @@
 #include <fluxcrawl/version.hpp>
 #include <fluxcrawl/url.hpp>
 #include <fluxcrawl/sequential_crawler.hpp>
+#include <fluxcrawl/thread_pool_crawler.hpp>
 
 #include <charconv>
 #include <exception>
@@ -12,10 +13,12 @@ namespace {
 void print_help()
 {
     std::cout << "FluxCrawl: a C++20 network-concurrency engineering project.\n"
-                 "Sequential blocking HTTP/HTTPS crawler.\n\n"
+                 "Sequential and threaded blocking HTTP/HTTPS crawler.\n\n"
                  "Usage:\n"
                  "  fluxcrawl [options] <seed-url>\n\n"
                  "Options:\n"
+                 "  --engine NAME   sequential (default) or threaded\n"
+                 "  --workers N     Threaded workers (default: 4; must be positive)\n"
                  "  --depth N       Maximum crawl depth (default: 2)\n"
                  "  --max-pages N   Maximum fetch attempts (default: 100)\n"
                  "  --same-host     Accept discoveries matching the seed host\n"
@@ -31,6 +34,9 @@ int main(int argc, char* argv[])
     bool show_version = false;
     std::string_view seed;
     fluxcrawl::CrawlOptions options;
+    std::string_view engine = "sequential";
+    std::size_t workers = 4;
+    bool workers_supplied = false;
 
     for (int index = 1; index < argc; ++index) {
         const std::string_view argument{argv[index]};
@@ -40,7 +46,17 @@ int main(int argc, char* argv[])
             show_version = true;
         } else if (argument == "--same-host") {
             options.same_host_only = true;
-        } else if (argument == "--depth" || argument == "--max-pages") {
+        } else if (argument == "--engine") {
+            if (index + 1 >= argc) {
+                std::cerr << "fluxcrawl: --engine requires sequential or threaded.\n";
+                return 1;
+            }
+            engine = argv[++index];
+            if (engine != "sequential" && engine != "threaded") {
+                std::cerr << "fluxcrawl: --engine requires sequential or threaded.\n";
+                return 1;
+            }
+        } else if (argument == "--depth" || argument == "--max-pages" || argument == "--workers") {
             if (index + 1 >= argc) {
                 std::cerr << "fluxcrawl: " << argument << " requires a non-negative integer.\n";
                 return 1;
@@ -52,7 +68,14 @@ int main(int argc, char* argv[])
                 std::cerr << "fluxcrawl: " << argument << " requires a non-negative integer.\n";
                 return 1;
             }
-            if (argument == "--depth") { options.max_depth = number; }
+            if (argument == "--workers") {
+                if (number == 0) {
+                    std::cerr << "fluxcrawl: --workers must be greater than zero.\n";
+                    return 1;
+                }
+                workers = number;
+                workers_supplied = true;
+            } else if (argument == "--depth") { options.max_depth = number; }
             else { options.max_pages = number; }
         } else if (argument.starts_with('-')) {
             std::cerr << "fluxcrawl: unknown option '" << argument
@@ -66,6 +89,10 @@ int main(int argc, char* argv[])
         }
     }
 
+    if (workers_supplied && engine != "threaded") {
+        std::cerr << "fluxcrawl: --workers requires --engine threaded.\n";
+        return 1;
+    }
     if (show_help) {
         print_help();
         return 0;
@@ -81,9 +108,12 @@ int main(int argc, char* argv[])
             return 1;
         }
         try {
-            const fluxcrawl::SequentialCrawler crawler;
-            const auto result = crawler.crawl(*url, options);
-            std::cout << "Seed: " << url->canonical()
+            const auto result = engine == "threaded"
+                ? fluxcrawl::ThreadPoolCrawler{workers}.crawl(*url, options)
+                : fluxcrawl::SequentialCrawler{}.crawl(*url, options);
+            std::cout << "Seed: " << url->canonical() << "\nEngine: " << engine;
+            if (engine == "threaded") { std::cout << "\nWorkers: " << workers; }
+            std::cout
                       << "\nMax depth: " << options.max_depth
                       << "\nMax pages: " << options.max_pages
                       << "\n\n" << (result.urls_pending == 0 ? "Frontier exhausted" : "Page limit reached")
