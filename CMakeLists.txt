@@ -9,6 +9,7 @@ include(cmake/CompilerWarnings.cmake)
 
 find_package(CURL 7.85 REQUIRED)
 find_package(LibXml2 REQUIRED)
+find_package(Threads REQUIRED)
 
 add_library(fluxcrawl_core
     src/url.cpp
@@ -18,11 +19,12 @@ add_library(fluxcrawl_core
     src/http_client.cpp
     src/http_response.cpp
     src/crawl_processing.cpp
-    src/sequential_crawler.cpp)
+    src/sequential_crawler.cpp
+    src/thread_pool_crawler.cpp)
 add_library(FluxCrawl::core ALIAS fluxcrawl_core)
 target_include_directories(fluxcrawl_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_compile_features(fluxcrawl_core PUBLIC cxx_std_20)
-target_link_libraries(fluxcrawl_core PRIVATE CURL::libcurl LibXml2::LibXml2)
+target_link_libraries(fluxcrawl_core PRIVATE CURL::libcurl LibXml2::LibXml2 Threads::Threads)
 fluxcrawl_enable_warnings(fluxcrawl_core)
 
 add_executable(fluxcrawl src/main.cpp)
