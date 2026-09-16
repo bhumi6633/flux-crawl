@@ -29,6 +29,13 @@ std::string_view trim_html_space(std::string_view text)
 
 } // namespace
 
+HtmlLinkExtractor::HtmlLinkExtractor()
+{
+    // Initialize once before worker creation; never clean up globals per document.
+    static const bool initialized = [] { xmlInitParser(); return true; }();
+    (void)initialized;
+}
+
 std::vector<Url> HtmlLinkExtractor::extract_links(std::string_view html, const Url& base_url) const
 {
     // libxml2's memory API takes an int length. Do not truncate oversized input.
