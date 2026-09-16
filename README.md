@@ -7,10 +7,8 @@ asynchronous I/O.
 **Under development.** The project provides build infrastructure, version
 information, a crawl CLI, an HTTP/HTTPS URL value type, and HTML anchor link
 extraction, plus in-memory FIFO crawl state and global discovery deduplication.
-The planned thread-pool backend
-and single-threaded libcurl `curl_multi` backend are not implemented. There is
-now a blocking HTTP client and a working sequential BFS crawler. There is no
-benchmark data yet.
+The sequential and blocking thread-pool engines are implemented. The event-driven
+libcurl `curl_multi` backend remains planned. There is no benchmark data yet.
 
 ## Build
 
@@ -39,15 +37,21 @@ select the configuration using `cmake --build build --config Debug` and
 ./build/fluxcrawl --help
 ./build/fluxcrawl --version
 ./build/fluxcrawl --depth 2 --max-pages 50 https://example.com
+./build/fluxcrawl --engine threaded --workers 8 --depth 2 --max-pages 100 https://example.com
 ```
 
 The version is defined in `include/fluxcrawl/version.hpp`. Help and version
-requests exit successfully. Invalid options, unsigned numeric values, or seed
+requests exit successfully. Invalid options, invalid numeric values, or seed
 arguments produce a diagnostic and status 1. A valid seed starts a sequential
 crawl. `--depth N` defaults to 2, `--max-pages N` defaults to 100, and `--same-host`
 optionally filters discoveries to the seed's exact normalized host. Zero values
 are allowed. Arguments are checked before displaying help or version; help takes
 precedence if both flags are present.
+
+`--engine sequential` is the default. `--engine threaded` uses four workers unless
+`--workers N` is supplied. Workers must be positive; supplying `--workers` with
+the sequential engine is rejected. Summaries identify the engine and, for threaded
+mode, the configured worker count. No throughput or speedup claims are reported.
 
 The summary reports attempt/response/failure counts, HTML pages processed,
 discoveries, and remaining queued URLs. Exit status is 1 if any fetch failed,
@@ -57,6 +61,7 @@ For a reproducible local demonstration that launches and cleans up the fixture:
 
 ```bash
 python3 tests/http_server.py ./build/fluxcrawl --crawl-cli
+python3 tests/http_server.py ./build/fluxcrawl --threaded-cli
 ```
 
 ## URL subsystem
@@ -158,8 +163,8 @@ Parser output composes by passing each extracted `Url` to `discover_from`; the
 state has no dependency on the parser and no same-domain restriction.
 
 These classes are single-threaded. `empty()` means the frontier has no queued
-items, not that popped work has finished. Future engines must account for
-in-flight work, synchronization, and concurrent completion order separately.
+items, not that popped work has finished. The threaded engine wraps them in its
+own coordinator to account for in-flight work and synchronization.
 The crawl state includes no networking, completed-request tracking, or production
 crawl loop.
 
@@ -220,12 +225,11 @@ A function-local static RAII object performs global initialization once and clea
 at process shutdown. Each fetch owns a fresh easy handle and callback buffer, so
 requests share no easy handle or mutable response storage. Clients/workers must
 finish before process shutdown; no connection pooling is implemented yet.
-`CURLOPT_NOSIGNAL` is set for future independent worker clients. DNS timeout behavior
+`CURLOPT_NOSIGNAL` is set for independent worker requests. DNS timeout behavior
 depends on libcurl's resolver backend; an asynchronous or threaded resolver build
-is needed to bound name lookup with signals disabled. No worker threads are created
-by FluxCrawl in this phase.
+is needed to bound name lookup with signals disabled.
 
-The test fixture runs a sequential Python HTTP server on `127.0.0.1` with an ephemeral
+The test fixture runs a threaded Python HTTP server on `127.0.0.1` with an ephemeral
 port, starts the C++ test as a child process, clears proxy environment variables,
 and always reaps the child and closes sockets. A reserved non-listening socket
 provides a deterministic unavailable endpoint (refusal or timeout depends on the OS).
@@ -280,9 +284,8 @@ and filters discoveries only. It does not restrict HTTP redirects. Redirect alia
 remain separate requested identities: reaching a final URL by redirect does not
 mark that final URL separately seen, so it can be fetched again if independently
 discovered. Page limits bound attempts, not the size of the discovered frontier.
-These semantics are explicit reference behavior for later engines; concurrent
-completion order, shared-state synchronization, and in-flight termination remain
-future work. No robots.txt, rate limiting, or retries are implemented.
+These semantics are the reference behavior shared by both engines.
+No robots.txt, rate limiting, or retries are implemented.
 
 The loopback crawl graph has `/crawl/ -> [a,b,shared,redirect-start]`,
 `a -> [deep,shared]`, `b -> [shared,/crawl/]`, and
@@ -290,6 +293,85 @@ The loopback crawl graph has `/crawl/ -> [a,b,shared,redirect-start]`,
 deduplication, zero/inclusive limits, failure accounting and continuation, 404/503
 handling, malformed HTML recovery, MIME gating, redirect bases, and host filtering.
 The CLI fixture also asserts the physical server request sequence.
+
+## Blocking thread-pool crawler
+
+```cpp
+#include <fluxcrawl/thread_pool_crawler.hpp>
+
+// Construct before starting any external workers that might use these libraries.
+const fluxcrawl::ThreadPoolCrawler crawler{4};
+// crawler.crawl(seed, options) returns the same CrawlResult model as sequential.
+```
+
+`ThreadPoolCrawler(std::size_t workers = 4, HttpClientOptions = {})` rejects zero
+workers. `crawl(const Url&, const CrawlOptions& = {}) const` creates a fixed pool
+for this call, joins it, and returns. Zero page budget returns without starting
+workers. The shared options/results now live in `crawl_types.hpp`; existing
+sequential includes remain compatible.
+
+```text
+                 Coordinator: CrawlState + results
+                  mutex / condition variable
+                      /        |        \
+                 Worker 1   Worker 2   Worker N
+                      \        |        /
+                  independent blocking fetches
+                  worker-local HTML documents
+                             |
+                   publish links and metadata
+```
+
+The private coordinator has one mutex protecting the frontier (including a single
+lookahead item), seen set, active count, attempt count, fatal error, and result
+aggregation. Claiming an item reserves its attempt budget and increments active
+work in the same critical section. Fetching and parsing run outside the lock.
+Publishing performs the canonical seen check, insertion, enqueue, and result
+update under the lock, then decrements active work and notifies all waiters.
+
+The condition-variable predicate wakes for a fatal error, an exhausted attempt
+budget, no active work, or available FIFO work at the active depth. A worker exits
+normally only when the budget is spent or no queued/active work remains. Temporary
+frontier emptiness never implies termination while another worker can discover
+links. Existing claims finish even after the budget is reached; all their results
+and discoveries are published. There is no busy waiting or detached work.
+
+Workers run concurrently within each depth level; the next level waits for the
+current active level to finish. This small depth barrier preserves shortest first
+discovery and the sequential reachable set under depth limits: otherwise a fast
+long path can mark a URL seen too deeply before a slow shorter path arrives.
+It does not impose ordering within a level. FIFO acquisition, publication, and
+record order are scheduling-dependent; threaded records use publication order.
+With a truncating page limit, the particular attempted subset can differ from
+sequential even though the exact budget is respected. Without truncation, the
+engines agree on requested URL/depth sets for a stable graph.
+
+Unexpected worker exceptions stop new claims, decrement any claimed active work,
+and wake every waiter. Partially started pools are also stopped and joined. The
+first exception is rethrown on the calling thread after joining; no partial result
+is presented as success. Already-running blocking requests finish or reach their
+configured timeouts. Routine HttpError outcomes remain nonfatal crawl results.
+
+The immutable HttpClient configuration is shared, but each fetch owns its easy
+handle and buffers. Global curl initialization happens during crawler construction,
+before pool startup. This follows [libcurl's threading requirements](https://curl.se/libcurl/c/threadsafe.html).
+Libxml2 initialization runs once before workers start; each extraction has independent
+document/XPath objects. No per-thread or per-request global cleanup is performed.
+Use thread-enabled libxml2 and thread-safe libcurl dependencies.
+
+Tests compare sequential and threaded URL/depth sets and response metadata, exercise
+1/2/4/8/16 workers, empty expansion, temporary emptiness, failure continuation,
+redirects, MIME/host filtering, and a deliberately slower shortest path. Each run
+repeats duplicate/termination and 16-worker five-attempt races 25 times. A 102-page
+generated graph is checked with 1/2/4/8 workers. Synchronized server counters assert
+one worker has peak concurrency 1 and four workers overlap; they also verify the
+shared target receives exactly one request. There are no timing speedup assertions.
+
+Local verification used AppleClang 16: all tests passed under ASan/UBSan, and the
+threaded engine/CLI passed TSan without race reports. Linked system libraries are
+not rebuilt with sanitizers, so this is evidence for the exercised paths rather
+than a proof of all possible schedules. No async I/O or benchmark framework is
+implemented.
 
 ## Layout
 
@@ -302,7 +384,11 @@ The CLI fixture also asserts the physical server request sequence.
   and state APIs, implemented by the corresponding `.cpp` files in `src/`.
 - `src/main.cpp`: thin command-line entrypoint.
 - `include/fluxcrawl/sequential_crawler.hpp` and `src/sequential_crawler.cpp`:
-  sequential orchestration, options, and metadata-only crawl results.
+  sequential orchestration.
+- `include/fluxcrawl/crawl_types.hpp`: shared options and metadata-only results.
+- `include/fluxcrawl/thread_pool_crawler.hpp` and `src/thread_pool_crawler.cpp`:
+  fixed worker pool and private crawl coordinator.
+- `src/crawl_processing.hpp` and `.cpp`: shared fetch/parse/publication rules.
 - `src/http_response.cpp`: reusable HTML media-type check.
 - `cmake/`: target-scoped compiler warning configuration.
 - `tests/`: offline CTest CLI, version, URL, and HTML extraction checks, without
