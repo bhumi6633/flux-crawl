@@ -22,6 +22,14 @@ fluxcrawl_enable_warnings(fluxcrawl_crawl_state_test)
 add_test(NAME core.crawl_state COMMAND fluxcrawl_crawl_state_test)
 set_tests_properties(core.crawl_state PROPERTIES TIMEOUT 10)
 
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+add_executable(fluxcrawl_http_client_test http_client_test.cpp)
+target_link_libraries(fluxcrawl_http_client_test PRIVATE FluxCrawl::core CURL::libcurl)
+fluxcrawl_enable_warnings(fluxcrawl_http_client_test)
+add_test(NAME core.http_client COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/http_server.py" "$<TARGET_FILE:fluxcrawl_http_client_test>")
+set_tests_properties(core.http_client PROPERTIES TIMEOUT 30)
+
 foreach(case IN ITEMS help version invalid help_invalid seed normalized_seed invalid_seed unsupported_seed missing extra_seed)
     add_test(NAME cli.${case}
         COMMAND "${CMAKE_COMMAND}"
