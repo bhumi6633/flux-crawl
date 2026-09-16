@@ -2,6 +2,7 @@
 #include <fluxcrawl/url.hpp>
 #include <fluxcrawl/sequential_crawler.hpp>
 #include <fluxcrawl/thread_pool_crawler.hpp>
+#include <fluxcrawl/async_crawler.hpp>
 
 #include <charconv>
 #include <exception>
@@ -13,12 +14,14 @@ namespace {
 void print_help()
 {
     std::cout << "FluxCrawl: a C++20 network-concurrency engineering project.\n"
-                 "Sequential and threaded blocking HTTP/HTTPS crawler.\n\n"
+                 "Sequential, threaded, and event-driven HTTP/HTTPS crawler.\n\n"
                  "Usage:\n"
                  "  fluxcrawl [options] <seed-url>\n\n"
                  "Options:\n"
-                 "  --engine NAME   sequential (default) or threaded\n"
+                 "  --engine NAME   sequential (default), threaded, or async\n"
                  "  --workers N     Threaded workers (default: 4; must be positive)\n"
+                 "  --concurrency N Async simultaneous transfers (default: 8; positive)\n"
+                 "                  One event-loop thread, continuous slot refill\n"
                  "  --depth N       Maximum crawl depth (default: 2)\n"
                  "  --max-pages N   Maximum fetch attempts (default: 100)\n"
                  "  --same-host     Accept discoveries matching the seed host\n"
@@ -37,6 +40,8 @@ int main(int argc, char* argv[])
     std::string_view engine = "sequential";
     std::size_t workers = 4;
     bool workers_supplied = false;
+    std::size_t concurrency = 8;
+    bool concurrency_supplied = false;
 
     for (int index = 1; index < argc; ++index) {
         const std::string_view argument{argv[index]};
@@ -48,15 +53,15 @@ int main(int argc, char* argv[])
             options.same_host_only = true;
         } else if (argument == "--engine") {
             if (index + 1 >= argc) {
-                std::cerr << "fluxcrawl: --engine requires sequential or threaded.\n";
+                std::cerr << "fluxcrawl: --engine requires sequential, threaded, or async.\n";
                 return 1;
             }
             engine = argv[++index];
-            if (engine != "sequential" && engine != "threaded") {
-                std::cerr << "fluxcrawl: --engine requires sequential or threaded.\n";
+            if (engine != "sequential" && engine != "threaded" && engine != "async") {
+                std::cerr << "fluxcrawl: --engine requires sequential, threaded, or async.\n";
                 return 1;
             }
-        } else if (argument == "--depth" || argument == "--max-pages" || argument == "--workers") {
+        } else if (argument == "--depth" || argument == "--max-pages" || argument == "--workers" || argument == "--concurrency") {
             if (index + 1 >= argc) {
                 std::cerr << "fluxcrawl: " << argument << " requires a non-negative integer.\n";
                 return 1;
@@ -68,13 +73,18 @@ int main(int argc, char* argv[])
                 std::cerr << "fluxcrawl: " << argument << " requires a non-negative integer.\n";
                 return 1;
             }
-            if (argument == "--workers") {
+            if (argument == "--workers" || argument == "--concurrency") {
                 if (number == 0) {
-                    std::cerr << "fluxcrawl: --workers must be greater than zero.\n";
+                    std::cerr << "fluxcrawl: " << argument << " must be greater than zero.\n";
                     return 1;
                 }
-                workers = number;
-                workers_supplied = true;
+                if (argument == "--workers") {
+                    workers = number;
+                    workers_supplied = true;
+                } else {
+                    concurrency = number;
+                    concurrency_supplied = true;
+                }
             } else if (argument == "--depth") { options.max_depth = number; }
             else { options.max_pages = number; }
         } else if (argument.starts_with('-')) {
@@ -93,6 +103,10 @@ int main(int argc, char* argv[])
         std::cerr << "fluxcrawl: --workers requires --engine threaded.\n";
         return 1;
     }
+    if (concurrency_supplied && engine != "async") {
+        std::cerr << "fluxcrawl: --concurrency requires --engine async.\n";
+        return 1;
+    }
     if (show_help) {
         print_help();
         return 0;
@@ -108,11 +122,14 @@ int main(int argc, char* argv[])
             return 1;
         }
         try {
-            const auto result = engine == "threaded"
-                ? fluxcrawl::ThreadPoolCrawler{workers}.crawl(*url, options)
-                : fluxcrawl::SequentialCrawler{}.crawl(*url, options);
+            const auto result = [&] {
+                if (engine == "async") { return fluxcrawl::AsyncCrawler{concurrency}.crawl(*url, options); }
+                if (engine == "threaded") { return fluxcrawl::ThreadPoolCrawler{workers}.crawl(*url, options); }
+                return fluxcrawl::SequentialCrawler{}.crawl(*url, options);
+            }();
             std::cout << "Seed: " << url->canonical() << "\nEngine: " << engine;
             if (engine == "threaded") { std::cout << "\nWorkers: " << workers; }
+            if (engine == "async") { std::cout << "\nConcurrency: " << concurrency; }
             std::cout
                       << "\nMax depth: " << options.max_depth
                       << "\nMax pages: " << options.max_pages

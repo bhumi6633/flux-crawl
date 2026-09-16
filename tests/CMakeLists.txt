@@ -52,7 +52,7 @@ add_test(NAME cli.threaded COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/http_server.py" "$<TARGET_FILE:fluxcrawl>" --threaded-cli)
 set_tests_properties(cli.threaded PROPERTIES TIMEOUT 30)
 
-foreach(case IN ITEMS help version invalid help_invalid seed normalized_seed invalid_seed unsupported_seed missing extra_seed bad_depth negative_pages overflow_depth missing_value bad_engine missing_engine zero_workers negative_workers overflow_workers missing_workers irrelevant_workers)
+foreach(case IN ITEMS help version invalid help_invalid seed normalized_seed invalid_seed unsupported_seed missing extra_seed bad_depth negative_pages overflow_depth missing_value bad_engine missing_engine zero_workers negative_workers overflow_workers missing_workers irrelevant_workers zero_concurrency negative_concurrency overflow_concurrency missing_concurrency bad_concurrency irrelevant_concurrency threaded_concurrency async_workers async_zero_pages)
     add_test(NAME cli.${case}
         COMMAND "${CMAKE_COMMAND}"
             "-DFLUXCRAWL=$<TARGET_FILE:fluxcrawl>"
@@ -60,3 +60,14 @@ foreach(case IN ITEMS help version invalid help_invalid seed normalized_seed inv
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cli_test.cmake")
     set_tests_properties(cli.${case} PROPERTIES TIMEOUT 10)
 endforeach()
+
+add_executable(fluxcrawl_async_crawler_test async_crawler_test.cpp)
+target_link_libraries(fluxcrawl_async_crawler_test PRIVATE FluxCrawl::core)
+fluxcrawl_enable_warnings(fluxcrawl_async_crawler_test)
+add_test(NAME core.async_crawler COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/http_server.py" "$<TARGET_FILE:fluxcrawl_async_crawler_test>")
+set_tests_properties(core.async_crawler PROPERTIES TIMEOUT 90)
+
+add_test(NAME cli.async COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/http_server.py" "$<TARGET_FILE:fluxcrawl>" --async-cli)
+set_tests_properties(cli.async PROPERTIES TIMEOUT 30)

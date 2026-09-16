@@ -1,4 +1,4 @@
-"""Run one C++ integration test against a sequential, loopback-only HTTP fixture."""
+"""Run one C++ integration test against a loopback-only HTTP fixture."""
 
 import gzip
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -23,12 +23,61 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         with self.server.lock:
             self.server.requests.append(self.path)
-        self.respond()
+        # Count outstanding server work until response dispatch; completed handlers
+        # may still be unwinding after the client has already started replacement work.
+        self.activity_data = None
+        tracked = self.path.startswith(("/stress/", "/refill/")) and not self.path.endswith("/stats")
+        key = self.path.rsplit("/", 1)[0]
+        if tracked:
+            with self.server.lock:
+                data = self.server.activity.setdefault(key, {"active": 0, "peak": 0, "counts": Counter()})
+                data["active"] += 1
+                data["peak"] = max(data["peak"], data["active"])
+                data["counts"][self.path.rsplit("/", 1)[1]] += 1
+                self.activity_data = data
+        try:
+            self.respond()
+        finally:
+            self.finish_activity()
+
+    def finish_activity(self):
+        if self.activity_data is not None:
+            with self.server.lock:
+                self.activity_data["active"] -= 1
+                self.activity_data = None
 
     def respond(self):
         status, body, content_type = 200, b"hello", "text/plain"
         headers = {}
-        if self.path.startswith("/pool/"):
+        if self.path.startswith(("/stress/", "/refill/")) and self.path.endswith("/stats"):
+            with self.server.lock:
+                data = self.server.activity[self.path.rsplit("/", 1)[0]]
+                body = f"{data['peak']} {sum(data['counts'].values())} {max(data['counts'].values())}".encode()
+        elif self.path.startswith("/refill/"):
+            prefix, page = self.path.rsplit("/", 1)
+            with self.server.lock:
+                data = self.server.runs.setdefault(prefix, {"a": threading.Event(), "c": threading.Event(),
+                                                          "d": threading.Event(), "passed": False})
+            if page == "root":
+                links = ["a", "b", "c", "d"]
+            else:
+                links = []
+                if page in ("a", "c"):
+                    data[page].set()
+                    data["d"].wait(3)  # A batched engine times out and fails the check below.
+                    data[page].clear()
+                elif page == "b":
+                    data["a"].wait(3)
+                    data["c"].wait(3)
+                elif page == "d":
+                    data["passed"] = data["a"].is_set() and data["c"].is_set()
+                    data["d"].set()
+                elif page == "result":
+                    body = b"1" if data["passed"] else b"0"
+            if page != "result":
+                body = "".join(f"<a href='{prefix}/{link}'>L</a>" for link in links).encode()
+                content_type = "text/html"
+        elif self.path.startswith("/pool/"):
             run, page = self.path[len("/pool/"):].split("/", 1)
             with self.server.lock:
                 data = self.server.runs.setdefault(run, {"active": 0, "peak": 0, "counts": Counter(), "overlap": threading.Event()})
@@ -60,6 +109,8 @@ class Handler(BaseHTTPRequestHandler):
                         data["active"] -= 1
         elif self.path.startswith("/stress/"):
             prefix, page = self.path.rsplit("/", 1)
+            if page != "root":
+                time.sleep(0.005)
             links = [str(i) for i in range(100)] if page == "root" else ["shared", "root"]
             if page == "shared":
                 links = []
@@ -85,9 +136,15 @@ class Handler(BaseHTTPRequestHandler):
                 "/crawl/failures": [self.server.unavailable, "/crawl/not-found", "/crawl/error",
                                     "/crawl/plain", "/crawl/binary", "/crawl/no-type", "/crawl/malformed"],
                 "/crawl/after": [],
+                "/crawl/isolated": ["/ok", "/empty", "/large", "/html"],
+                "/crawl/transport": ["/ok", "/truncated", "/empty", "/html"],
+                "/crawl/chain": ["/crawl/slow-chain"],
+                "/crawl/slow-chain": ["/crawl/after"],
                 "/crawl/host-policy": [f"http://localhost:{self.server.server_port}/crawl/shared",
                                        self.server.unavailable, "/crawl/shared"],
             }
+            if self.path == "/crawl/slow-chain":
+                time.sleep(0.05)
             if self.path in graph:
                 body = "".join(f"<a href='{link}'>Link</a>" for link in graph[self.path]).encode()
             elif self.path == "/crawl/redirect-start":
@@ -113,6 +170,8 @@ class Handler(BaseHTTPRequestHandler):
             body, content_type = b"<a href='next'>Next</a>", "text/html; charset=UTF-8"
         elif self.path == "/not-found":
             status, body = 404, b"not found"
+        elif self.path in ("/http-500", "/http-429"):
+            status = int(self.path.rsplit("-", 1)[1])
         elif self.path == "/server-error":
             status, body = 503, b"unavailable"
         elif self.path in ("/redirect", "/loop", "/forbidden", "/invalid-effective"):
@@ -149,6 +208,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.flush()
             self.wfile.write(b"0\r\n\r\n")
             return
+        self.finish_activity()
         self.send_response(status)
         if content_type is not None:
             self.send_header("Content-Type", content_type)
@@ -169,6 +229,7 @@ def main():
         server.requests = []
         server.lock = threading.Lock()
         server.runs = {}
+        server.activity = {}
         server.unavailable = f"http://127.0.0.1:{refused.getsockname()[1]}/"
         server.timeout = 0.05
         environment = {key: value for key, value in os.environ.items()
@@ -177,13 +238,16 @@ def main():
         command = [sys.argv[1], f"http://127.0.0.1:{server.server_port}",
                    f"http://127.0.0.1:{refused.getsockname()[1]}"]
         threaded_cli = len(sys.argv) > 2 and sys.argv[2] == "--threaded-cli"
-        cli_mode = len(sys.argv) > 2 and sys.argv[2] in ("--crawl-cli", "--threaded-cli")
+        async_cli = len(sys.argv) > 2 and sys.argv[2] == "--async-cli"
+        cli_mode = len(sys.argv) > 2 and sys.argv[2] in ("--crawl-cli", "--threaded-cli", "--async-cli")
         if cli_mode:
-            command = [sys.argv[1], "--engine", "threaded" if threaded_cli else "sequential",
+            command = [sys.argv[1], "--engine", "async" if async_cli else "threaded" if threaded_cli else "sequential",
                        "--depth", "3", "--max-pages", "50",
                        f"http://127.0.0.1:{server.server_port}/crawl/"]
             if threaded_cli:
                 command += ["--workers", "4"]
+            if async_cli:
+                command += ["--concurrency", "8"]
             print("Running:", " ".join(command), flush=True)
         with subprocess.Popen(command, env=environment, stdout=subprocess.PIPE if cli_mode else None,
                               text=True) as child:
@@ -204,12 +268,17 @@ def main():
                                 "/crawl/deep", "/crawl/redirected/child.html"]
                     with server.lock:
                         actual = list(server.requests)
-                    if threaded_cli:
+                    if async_cli:
+                        assert "Engine: async\nConcurrency: 8\n" in output
+                        assert Counter(actual) == Counter(expected), actual
+                    elif threaded_cli:
                         assert "Engine: threaded\nWorkers: 4\n" in output
                         assert Counter(actual) == Counter(expected), actual
                     else:
                         assert "Engine: sequential\n" in output
                         assert actual == expected, actual
+                with server.lock:
+                    assert "/never-request-zero" not in server.requests
                 return child.returncode
             finally:
                 if child.poll() is None:
