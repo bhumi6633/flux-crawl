@@ -15,7 +15,9 @@ add_library(fluxcrawl_core
     src/html_parser.cpp
     src/crawl_frontier.cpp
     src/crawl_state.cpp
-    src/http_client.cpp)
+    src/http_client.cpp
+    src/http_response.cpp
+    src/sequential_crawler.cpp)
 add_library(FluxCrawl::core ALIAS fluxcrawl_core)
 target_include_directories(fluxcrawl_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_compile_features(fluxcrawl_core PUBLIC cxx_std_20)

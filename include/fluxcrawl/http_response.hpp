@@ -4,9 +4,12 @@
 
 #include <cstddef>
 #include <string>
+#include <string_view>
 #include <variant>
 
 namespace fluxcrawl {
+
+[[nodiscard]] bool is_html_content_type(std::string_view content_type) noexcept;
 
 struct HttpResponse {
     Url requested_url;
