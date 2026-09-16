@@ -7,8 +7,8 @@ asynchronous I/O.
 **Under development.** The project provides build infrastructure, version
 information, a crawl CLI, an HTTP/HTTPS URL value type, and HTML anchor link
 extraction, plus in-memory FIFO crawl state and global discovery deduplication.
-The sequential and blocking thread-pool engines are implemented. The event-driven
-libcurl `curl_multi` backend remains planned. There is no benchmark data yet.
+The sequential, blocking thread-pool, and event-driven libcurl `curl_multi` engines
+are implemented. There is no benchmark data yet.
 
 ## Build
 
@@ -17,7 +17,7 @@ development headers, plus libxml2 development headers. On Debian/Ubuntu, install
 `libcurl4-openssl-dev libxml2-dev`; the macOS Command Line Tools SDK includes both.
 Python 3 is required when building tests (the default); no Python packages are
 needed. Use `-DBUILD_TESTING=OFF` for a library/CLI build without Python.
-URL operations remain local; only explicit `HttpClient::fetch` calls make requests.
+URL operations remain local; HTTP fetches and crawler calls make requests.
 
 ```bash
 cmake -S . -B build
@@ -38,6 +38,7 @@ select the configuration using `cmake --build build --config Debug` and
 ./build/fluxcrawl --version
 ./build/fluxcrawl --depth 2 --max-pages 50 https://example.com
 ./build/fluxcrawl --engine threaded --workers 8 --depth 2 --max-pages 100 https://example.com
+./build/fluxcrawl --engine async --concurrency 8 --depth 3 --max-pages 50 https://example.com
 ```
 
 The version is defined in `include/fluxcrawl/version.hpp`. Help and version
@@ -50,8 +51,10 @@ precedence if both flags are present.
 
 `--engine sequential` is the default. `--engine threaded` uses four workers unless
 `--workers N` is supplied. Workers must be positive; supplying `--workers` with
-the sequential engine is rejected. Summaries identify the engine and, for threaded
-mode, the configured worker count. No throughput or speedup claims are reported.
+any other engine is rejected. `--engine async` uses one event loop with up to eight
+simultaneous transfers by default; `--concurrency N` changes that limit and must be
+positive. Supplying it to sequential or threaded mode is rejected. Summaries identify
+the engine and its worker/transfer limit. No throughput or speedup claims are reported.
 
 The summary reports attempt/response/failure counts, HTML pages processed,
 discoveries, and remaining queued URLs. Exit status is 1 if any fetch failed,
@@ -62,6 +65,7 @@ For a reproducible local demonstration that launches and cleans up the fixture:
 ```bash
 python3 tests/http_server.py ./build/fluxcrawl --crawl-cli
 python3 tests/http_server.py ./build/fluxcrawl --threaded-cli
+python3 tests/http_server.py ./build/fluxcrawl --async-cli
 ```
 
 ## URL subsystem
@@ -224,7 +228,8 @@ Libcurl's standard environment proxy behavior applies outside the isolated tests
 A function-local static RAII object performs global initialization once and cleanup
 at process shutdown. Each fetch owns a fresh easy handle and callback buffer, so
 requests share no easy handle or mutable response storage. Clients/workers must
-finish before process shutdown; no connection pooling is implemented yet.
+finish before process shutdown. Blocking fetches do not reuse a connection pool
+across calls; the async multi handle can reuse connections within its crawl.
 `CURLOPT_NOSIGNAL` is set for independent worker requests. DNS timeout behavior
 depends on libcurl's resolver backend; an asynchronous or threaded resolver build
 is needed to bound name lookup with signals disabled.
@@ -284,7 +289,7 @@ and filters discoveries only. It does not restrict HTTP redirects. Redirect alia
 remain separate requested identities: reaching a final URL by redirect does not
 mark that final URL separately seen, so it can be fetched again if independently
 discovered. Page limits bound attempts, not the size of the discovered frontier.
-These semantics are the reference behavior shared by both engines.
+These semantics are the reference behavior shared by all three engines.
 No robots.txt, rate limiting, or retries are implemented.
 
 The loopback crawl graph has `/crawl/ -> [a,b,shared,redirect-start]`,
@@ -370,8 +375,130 @@ shared target receives exactly one request. There are no timing speedup assertio
 Local verification used AppleClang 16: all tests passed under ASan/UBSan, and the
 threaded engine/CLI passed TSan without race reports. Linked system libraries are
 not rebuilt with sanitizers, so this is evidence for the exercised paths rather
-than a proof of all possible schedules. No async I/O or benchmark framework is
-implemented.
+than a proof of all possible schedules. No benchmark framework is implemented.
+
+## Event-driven async crawler
+
+```cpp
+#include <fluxcrawl/async_crawler.hpp>
+
+const fluxcrawl::AsyncCrawler crawler{8};
+// crawler.crawl(seed, options) returns the shared CrawlResult.
+```
+
+`AsyncCrawler(std::size_t concurrency = 8, HttpClientOptions = {})` rejects zero
+concurrency and validates the same HTTP options as the blocking client.
+`crawl(const Url&, CrawlOptions = {}) const` owns fresh state and one multi handle
+per call. All networking coordination, callbacks, HTML extraction, discovery, and
+result publication run on the calling thread. FluxCrawl starts no async worker
+threads and uses no coroutines, mutexes, or condition variables in this engine.
+Libcurl/system resolver internals may use threads.
+
+```text
+                       Shared crawl semantics
+                       /         |           \
+                Sequential    Thread pool    Async multi
+                1 blocking    N blocking     1 event-loop thread
+                request       workers        N active transfers
+                       \         |           /
+                  Shared HTTP setup and response processing
+                       HTML extraction + CrawlState
+```
+
+The loop fills eligible FIFO slots, calls `curl_multi_perform`, drains every
+`CURLMSG_DONE` from `curl_multi_info_read`, processes responses, and refills slots
+before waiting. Newly added handles get a perform call before the next wait.
+[`curl_multi_poll`](https://curl.se/libcurl/c/curl_multi_poll.html) waits up to
+1000 ms, honoring shorter internal libcurl timers. Unlike `curl_multi_wait`, it
+also sleeps when there are no descriptors, so zero descriptors are normal and do
+not cause a busy loop or false failure. It is supported by the existing libcurl
+7.85 minimum.
+
+Concurrency bounds active logical transfers, including redirects, rather than
+threads or fixed batches. Completion frees a slot immediately for eligible FIFO
+work, even while other transfers remain active. As with the threaded engine,
+advancing to the next depth waits for the current depth to finish. This depth
+barrier preserves shortest first discovery under inclusive depth limits; it does
+not batch same-depth transfers. At a level boundary some capacity can be idle.
+Record order follows completion processing, and a truncated crawl can select a
+different subset than sequential. No completion ordering is forced.
+
+An internal `unordered_map<CURL*, unique_ptr<ActiveTransfer>>` keys each handle to
+its item and shared `CurlTransfer`. Heap ownership keeps callback body/error
+buffers at stable addresses through map growth. The transfer is noncopyable and
+nonmovable. Its easy handle is destroyed before its buffers. Both HTTP engines
+use the same setup, write callback, decoded-body cap, and result conversion in
+`src/curl_transfer.*`; blocking `HttpClient::fetch` remains a blocking easy call.
+
+Map insertion precedes attachment, avoiding a stranded handle on allocation
+failure. On completion the code copies the message result before removing the
+easy handle, then extracts metadata, processes links, and destroys the transfer.
+[`curl_multi_info_read` message storage](https://curl.se/libcurl/c/curl_multi_info_read.html)
+must not be used after removal. Normal and exception cleanup detach remaining
+easy handles before freeing them, then clean up the multi handle, following
+[libcurl's ownership order](https://curl.se/libcurl/c/curl_multi_cleanup.html).
+Global cleanup occurs only at process shutdown. Multi init/add/perform/poll/remove
+and normal cleanup errors throw as fatal engine errors; unwinding cleanup cannot
+throw. No partial crawl result is returned on a fatal error.
+
+An attempt is reserved when a frontier item is committed to transfer setup; even
+an easy setup failure consumes that attempt, matching blocking behavior. Filling
+requires both `active < concurrency` and `attempted < max_pages`. Existing active
+transfers finish and publish their discoveries after the budget is exhausted.
+Zero pages performs no transfers. An empty frontier with active work keeps waiting;
+termination requires no active transfers and either no pending work or no budget.
+The one-item FIFO lookahead is included in pending counts. `CrawlState` handles all
+canonical deduplication and depth acceptance without synchronization.
+
+Individual HTTP/client failures become records and allow siblings to continue.
+404/500/503/429 remain responses. Oversized decoded bodies abort only that transfer;
+partial bodies are never parsed. Redirects, redirect limits, timeout values,
+User-Agent, compression, secure TLS defaults, media-type gating, and effective-URL
+link bases use the shared HTTP and processing code. Redirect aliases retain the
+same requested-identity semantics as the other engines.
+
+The async test suite compares URL/depth sets, counters, full response metadata,
+and error categories against both reference engines. It exercises concurrency
+1/2/4/8/32/64, exact and zero budgets, depth limits, host filtering, redirect bases,
+HTTP failures, transport failures, timeouts, binary/gzip/chunked bodies, malformed
+HTML, and surplus capacity. Server counters verify overlap and concurrency caps.
+A controlled refill graph holds A and C until D starts after B completes: ten
+repetitions prove replacement happens before the other requests finish. Ten
+repetitions also cover temporary empty frontier expansion, exact five-request
+budgets confirmed by server counts, oversized-body isolation, and transport-error
+isolation. High fanout visits 102 unique pages with concurrency 1/2/4/8/16, checking
+server counts and caps. Tests never assert a speedup.
+
+For sanitizer verification:
+
+```bash
+cmake -S . -B build-sanitize -DCMAKE_BUILD_TYPE=Debug \
+  -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+  -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+cmake --build build-sanitize
+ASAN_OPTIONS=halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
+  ctest --test-dir build-sanitize --output-on-failure
+```
+
+Step 7 local verification on AppleClang 16 passed all 41 CTest tests in both normal
+and ASan/UBSan builds. The async executable reported 2,230 checks with no failures,
+including server peaks of 1, 3, and 4 at those configured limits. Running that
+executable through macOS `leaks --atExit --` under the same local fixture reported
+zero leaks (zero leaked bytes). Each engine's CLI demonstration reported seven
+attempts, seven responses, seven HTML pages, zero failures, seven discoveries, and
+zero pending URLs. System dependencies are not sanitizer-instrumented; fatal
+multi errors and allocator exhaustion were reviewed but are not fault-injected.
+
+For future measurements, account for depth barriers in both concurrent engines,
+HTML parsing on the async event-loop thread versus worker-local parsing, and
+libcurl's multi connection reuse versus fresh blocking easy handles. Concurrency
+is a transfer cap, not a rate limit or necessarily a socket count (redirects and
+protocol multiplexing matter). Decoded bodies can occupy up to roughly
+`concurrency * max_body_bytes` plus parser/library storage; discovered URLs and
+metadata records also consume memory and are not bounded by the active cap.
+The local fixture uses HTTP/1.0 close-after-response behavior, so it does not test
+connection reuse or TLS. Resolver, TLS, HTTP version, and connection policy need
+explicit control in later experiments. No engine performance ranking is claimed.
 
 ## Layout
 
@@ -388,6 +515,9 @@ implemented.
 - `include/fluxcrawl/crawl_types.hpp`: shared options and metadata-only results.
 - `include/fluxcrawl/thread_pool_crawler.hpp` and `src/thread_pool_crawler.cpp`:
   fixed worker pool and private crawl coordinator.
+- `include/fluxcrawl/async_crawler.hpp` and `src/async_crawler.cpp`: single-threaded
+  multi event loop and transfer ownership.
+- `src/curl_transfer.hpp` and `.cpp`: internal shared easy setup, buffers, and results.
 - `src/crawl_processing.hpp` and `.cpp`: shared fetch/parse/publication rules.
 - `src/http_response.cpp`: reusable HTML media-type check.
 - `cmake/`: target-scoped compiler warning configuration.
