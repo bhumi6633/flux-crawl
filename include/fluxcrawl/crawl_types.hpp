@@ -33,7 +33,7 @@ struct CrawlResult {
     std::size_t html_pages_processed = 0;
     std::size_t urls_discovered = 0; // Accepted by CrawlState, including the seed.
     std::size_t urls_pending = 0;
-    std::vector<CrawlRecord> records; // Sequential attempt order or threaded publication order; no bodies.
+    std::vector<CrawlRecord> records; // Sequential attempt order or concurrent publication order; no bodies.
 };
 
 } // namespace fluxcrawl
