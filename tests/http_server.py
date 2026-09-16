@@ -118,13 +118,28 @@ def main():
         environment["NO_PROXY"] = "*"
         command = [sys.argv[1], f"http://127.0.0.1:{server.server_port}",
                    f"http://127.0.0.1:{refused.getsockname()[1]}"]
-        with subprocess.Popen(command, env=environment) as child:
+        cli_mode = len(sys.argv) > 2 and sys.argv[2] == "--crawl-cli"
+        if cli_mode:
+            command = [sys.argv[1], "--depth", "2", "--max-pages", "20",
+                       f"http://127.0.0.1:{server.server_port}/crawl/"]
+            print("Running:", " ".join(command), flush=True)
+        with subprocess.Popen(command, env=environment, stdout=subprocess.PIPE if cli_mode else None,
+                              text=True) as child:
             try:
                 deadline = time.monotonic() + 25
                 while child.poll() is None:
                     if time.monotonic() > deadline:
                         raise TimeoutError("HTTP integration test exceeded 25 seconds")
                     server.handle_request()
+                if cli_mode:
+                    output = child.communicate()[0]
+                    print(output, end="")
+                    for line in ("Pages attempted: 7\n", "Responses: 7\n", "Fetch failures: 0\n",
+                                 "URLs discovered: 7\n", "URLs pending: 0\n", "HTML pages processed: 5\n"):
+                        assert line in output, output
+                    assert server.requests == ["/crawl/", "/crawl/a", "/crawl/b", "/crawl/shared",
+                                               "/crawl/redirect-start", "/crawl/redirected/index.html",
+                                               "/crawl/deep", "/crawl/redirected/child.html"], server.requests
                 return child.returncode
             finally:
                 if child.poll() is None:
