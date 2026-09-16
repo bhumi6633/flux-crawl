@@ -16,6 +16,7 @@ add_library(fluxcrawl_core
     src/html_parser.cpp
     src/crawl_frontier.cpp
     src/crawl_state.cpp
+    src/curl_transfer.cpp
     src/http_client.cpp
     src/http_response.cpp
     src/crawl_processing.cpp

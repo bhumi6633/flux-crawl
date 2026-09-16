@@ -8,6 +8,11 @@ namespace fluxcrawl::detail {
 ProcessedPage process_page(const HttpClient& client, CrawlItem item, const CrawlOptions& options)
 {
     auto fetched = client.fetch(item.url);
+    return process_response(std::move(fetched), std::move(item), options);
+}
+
+ProcessedPage process_response(HttpResult fetched, CrawlItem item, const CrawlOptions& options)
+{
     if (auto* error = std::get_if<HttpError>(&fetched)) {
         return {{std::move(item), std::move(*error)}, {}, false};
     }
