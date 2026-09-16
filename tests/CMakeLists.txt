@@ -37,6 +37,13 @@ add_test(NAME core.sequential_crawler COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/http_server.py" "$<TARGET_FILE:fluxcrawl_sequential_crawler_test>")
 set_tests_properties(core.sequential_crawler PROPERTIES TIMEOUT 30)
 
+add_executable(fluxcrawl_thread_pool_crawler_test thread_pool_crawler_test.cpp)
+target_link_libraries(fluxcrawl_thread_pool_crawler_test PRIVATE FluxCrawl::core)
+fluxcrawl_enable_warnings(fluxcrawl_thread_pool_crawler_test)
+add_test(NAME core.thread_pool_crawler COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/http_server.py" "$<TARGET_FILE:fluxcrawl_thread_pool_crawler_test>")
+set_tests_properties(core.thread_pool_crawler PROPERTIES TIMEOUT 90)
+
 add_test(NAME cli.crawl COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/http_server.py" "$<TARGET_FILE:fluxcrawl>" --crawl-cli)
 set_tests_properties(cli.crawl PROPERTIES TIMEOUT 30)

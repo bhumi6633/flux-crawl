@@ -1,12 +1,19 @@
 """Run one C++ integration test against a sequential, loopback-only HTTP fixture."""
 
 import gzip
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os
 import socket
 import subprocess
 import sys
 import time
+import threading
+from collections import Counter
+
+
+class FixtureServer(ThreadingHTTPServer):
+    daemon_threads = False
+    request_queue_size = 128
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -14,10 +21,59 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        self.server.requests.append(self.path)
+        with self.server.lock:
+            self.server.requests.append(self.path)
+        self.respond()
+
+    def respond(self):
         status, body, content_type = 200, b"hello", "text/plain"
         headers = {}
-        if self.path.startswith("/crawl/"):
+        if self.path.startswith("/pool/"):
+            run, page = self.path[len("/pool/"):].split("/", 1)
+            with self.server.lock:
+                data = self.server.runs.setdefault(run, {"active": 0, "peak": 0, "counts": Counter(), "overlap": threading.Event()})
+                if page == "stats":
+                    body = f"{data['peak']} {data['counts']['shared']}".encode()
+                else:
+                    data["counts"][page] += 1
+                    data["active"] += 1
+                    data["peak"] = max(data["peak"], data["active"])
+                    if data["active"] > 1:
+                        data["overlap"].set()
+            if page != "stats":
+                try:
+                    prefix = f"/pool/{run}/"
+                    if page == "root":
+                        time.sleep(0.02)  # Only seed active; other workers must wait, not exit.
+                        links = ["a", "b", "c", "d"]
+                    elif page in ("a", "b", "c", "d"):
+                        if run.startswith("overlap4"):
+                            data["overlap"].wait(2)
+                        time.sleep(0.03)
+                        links = ["shared", "root"]
+                    else:
+                        links = []
+                    body = "".join(f"<a href='{prefix}{link}'>L</a>" for link in links).encode()
+                    content_type = "text/html"
+                finally:
+                    with self.server.lock:
+                        data["active"] -= 1
+        elif self.path.startswith("/stress/"):
+            prefix, page = self.path.rsplit("/", 1)
+            links = [str(i) for i in range(100)] if page == "root" else ["shared", "root"]
+            if page == "shared":
+                links = []
+            body = "".join(f"<a href='{prefix}/{link}'>L</a>" for link in links).encode()
+            content_type = "text/html"
+        elif self.path.startswith("/depth-race/"):
+            page = self.path.rsplit("/", 1)[1]
+            graph = {"root": ["fast", "slow"], "fast": ["middle"], "middle": ["shared"],
+                     "slow": ["shared"], "shared": ["leaf"], "leaf": []}
+            if page == "slow":
+                time.sleep(0.1)
+            body = "".join(f"<a href='/depth-race/{link}'>L</a>" for link in graph[page]).encode()
+            content_type = "text/html"
+        elif self.path.startswith("/crawl/"):
             content_type = "text/html; charset=UTF-8"
             graph = {
                 "/crawl/": ["/crawl/a", "/crawl/b", "/crawl/shared", "/crawl/redirect-start"],
@@ -108,9 +164,11 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     # Hold a bound, non-listening socket so the refusal port cannot be stolen.
-    with socket.socket() as refused, HTTPServer(("127.0.0.1", 0), Handler) as server:
+    with socket.socket() as refused, FixtureServer(("127.0.0.1", 0), Handler) as server:
         refused.bind(("127.0.0.1", 0))
         server.requests = []
+        server.lock = threading.Lock()
+        server.runs = {}
         server.unavailable = f"http://127.0.0.1:{refused.getsockname()[1]}/"
         server.timeout = 0.05
         environment = {key: value for key, value in os.environ.items()
@@ -126,10 +184,10 @@ def main():
         with subprocess.Popen(command, env=environment, stdout=subprocess.PIPE if cli_mode else None,
                               text=True) as child:
             try:
-                deadline = time.monotonic() + 25
+                deadline = time.monotonic() + 80
                 while child.poll() is None:
                     if time.monotonic() > deadline:
-                        raise TimeoutError("HTTP integration test exceeded 25 seconds")
+                        raise TimeoutError("HTTP integration test exceeded 80 seconds")
                     server.handle_request()
                 if cli_mode:
                     output = child.communicate()[0]
