@@ -9,15 +9,17 @@ information, a minimal CLI, an HTTP/HTTPS URL value type, and HTML anchor link
 extraction, plus in-memory FIFO crawl state and global discovery deduplication.
 The planned thread-pool backend
 and single-threaded libcurl `curl_multi` backend are not implemented. There is
-no HTTP fetching, crawling, or benchmark data yet.
+now a single-request blocking HTTP client, but no complete crawling engine or
+benchmark data yet.
 
 ## Build
 
-Requires CMake 3.20 or newer, a C++20 compiler, and libcurl 7.62 or newer with
+Requires CMake 3.20 or newer, a C++20 compiler, and libcurl 7.85 or newer with
 development headers, plus libxml2 development headers. On Debian/Ubuntu, install
 `libcurl4-openssl-dev libxml2-dev`; the macOS Command Line Tools SDK includes both.
-Only libcurl's URL API is used; URL
-operations do not initialize a network client or make requests.
+Python 3 is required when building tests (the default); no Python packages are
+needed. Use `-DBUILD_TESTING=OFF` for a library/CLI build without Python.
+URL operations remain local; only explicit `HttpClient::fetch` calls make requests.
 
 ```bash
 cmake -S . -B build
@@ -147,13 +149,88 @@ state has no dependency on the parser and no same-domain restriction.
 These classes are single-threaded. `empty()` means the frontier has no queued
 items, not that popped work has finished. Future engines must account for
 in-flight work, synchronization, and concurrent completion order separately.
-No networking, completed-request tracking, or production crawl loop is included.
+The crawl state includes no networking, completed-request tracking, or production
+crawl loop.
+
+## Blocking HTTP client
+
+```cpp
+#include <fluxcrawl/http_client.hpp>
+
+const auto url = fluxcrawl::Url::parse("https://example.com/");
+if (url) {
+    const fluxcrawl::HttpClient client;
+    const fluxcrawl::HttpResult result = client.fetch(*url);
+    if (const auto* response = std::get_if<fluxcrawl::HttpResponse>(&result)) {
+        // Inspect status_code, content_type, body, and effective_url.
+        // Future HTML processing should use effective_url as its base.
+    } else {
+        const auto& error = std::get<fluxcrawl::HttpError>(result);
+        // Inspect error.code, error.curl_code, and error.message.
+        (void)error;
+    }
+}
+```
+
+`HttpClient(HttpClientOptions = {})` validates options and initializes libcurl.
+`fetch(const Url&) const` performs one blocking logical GET (including redirects),
+without retrying. It does not parse HTML or access crawl state. The production CLI
+is unchanged; the integration tests demonstrate fetching.
+
+`HttpResponse` contains requested and normalized effective URLs, the numeric HTTP
+status, the supplied Content-Type (empty when absent), a binary-safe `std::string`
+body, and `downloaded_bytes`. The count is the decoded body size, not compressed
+wire traffic. Explicit byte counts preserve embedded NULs and append all chunks.
+404/429/5xx responses are responses, not transport failures.
+
+`HttpResult` is `std::variant<HttpResponse, HttpError>`. Error categories distinguish
+libcurl failures, body-limit violations, callback buffer failures, invalid effective
+URLs, and missing HTTP status. Errors retain a numeric curl code where applicable
+and a diagnostic message; incomplete bodies are not exposed as successful responses.
+Routine transport failures do not throw. Invalid construction options/global
+initialization failures may throw, as may ordinary C++ allocation failures outside
+the callback. No exception escapes the C write callback.
+
+Options default to a 5-second connection timeout, 30-second overall timeout,
+10 redirects, 8 MiB maximum decoded body, and `FluxCrawl/` plus the project version.
+Timeouts must be positive and fit libcurl's millisecond `long`; redirects must be
+nonnegative. A zero body limit accepts only empty bodies. The callback checks the
+limit before appending, including decompressed data. Compression support is supplied
+by libcurl's build through `CURLOPT_ACCEPT_ENCODING`.
+
+Initial and redirected transfers are restricted to HTTP/HTTPS using libcurl's
+[protocol options](https://curl.se/libcurl/c/CURLOPT_PROTOCOLS_STR.html), which
+require version 7.85. Redirect loops are bounded; a limit of zero rejects following
+a redirect. Effective URLs must pass `Url::parse`. TLS peer and hostname verification
+retain secure defaults. No cookies, credentials, or retry policy are configured.
+Libcurl's standard environment proxy behavior applies outside the isolated tests.
+
+A function-local static RAII object performs global initialization once and cleanup
+at process shutdown. Each fetch owns a fresh easy handle and callback buffer, so
+requests share no easy handle or mutable response storage. Clients/workers must
+finish before process shutdown; no connection pooling is implemented yet.
+`CURLOPT_NOSIGNAL` is set for future independent worker clients. DNS timeout behavior
+depends on libcurl's resolver backend; an asynchronous or threaded resolver build
+is needed to bound name lookup with signals disabled. No worker threads are created
+by FluxCrawl in this phase.
+
+The test fixture runs a sequential Python HTTP server on `127.0.0.1` with an ephemeral
+port, starts the C++ test as a child process, clears proxy environment variables,
+and always reaps the child and closes sockets. A reserved non-listening socket
+provides a deterministic unavailable endpoint (refusal or timeout depends on the OS).
+No public internet services are contacted. Tests cover GET, HTML metadata, redirects,
+404/503, binary/chunked/gzip bodies, missing Content-Type, empty responses, exact/zero/
+exceeded body limits, connection failure, request timeout, redirect loops and protocol
+restrictions, invalid effective URLs, truncated bodies, user agents, and option
+validation. TLS verification is preserved but a local TLS fixture is not included.
 
 ## Layout
 
 - `include/fluxcrawl/`: public version, URL, and HTML extractor headers.
 - `src/url.cpp`: URL implementation in the compiled `fluxcrawl_core` library.
 - `src/html_parser.cpp`: libxml2 HTML extraction, also in `fluxcrawl_core`.
+- `include/fluxcrawl/http_client.hpp`, `http_response.hpp`, and `src/http_client.cpp`:
+  blocking HTTP API and implementation.
 - `include/fluxcrawl/crawl_frontier.hpp` and `crawl_state.hpp`: public crawl work
   and state APIs, implemented by the corresponding `.cpp` files in `src/`.
 - `src/main.cpp`: thin command-line entrypoint.
