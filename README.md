@@ -5,11 +5,11 @@ the same crawling workload with threaded blocking I/O and event-driven
 asynchronous I/O.
 
 **Under development.** The project provides build infrastructure, version
-information, a minimal CLI, an HTTP/HTTPS URL value type, and HTML anchor link
+information, a crawl CLI, an HTTP/HTTPS URL value type, and HTML anchor link
 extraction, plus in-memory FIFO crawl state and global discovery deduplication.
 The planned thread-pool backend
 and single-threaded libcurl `curl_multi` backend are not implemented. There is
-now a single-request blocking HTTP client, but no complete crawling engine or
+now a blocking HTTP client and a working sequential BFS crawler. There is no
 benchmark data yet.
 
 ## Build
@@ -38,15 +38,26 @@ select the configuration using `cmake --build build --config Debug` and
 ```bash
 ./build/fluxcrawl --help
 ./build/fluxcrawl --version
+./build/fluxcrawl --depth 2 --max-pages 50 https://example.com
 ```
 
 The version is defined in `include/fluxcrawl/version.hpp`. Help and version
-requests exit successfully; invalid options, missing or extra seed arguments,
-and crawl requests exit with status 1. Seed arguments are validated with `Url`;
-invalid or unsupported URLs produce `invalid or unsupported seed URL`. A valid
-seed produces `crawl engine not implemented yet` and performs no network activity. Arguments
-are checked before displaying help or version; help takes precedence if both
-flags are present.
+requests exit successfully. Invalid options, unsigned numeric values, or seed
+arguments produce a diagnostic and status 1. A valid seed starts a sequential
+crawl. `--depth N` defaults to 2, `--max-pages N` defaults to 100, and `--same-host`
+optionally filters discoveries to the seed's exact normalized host. Zero values
+are allowed. Arguments are checked before displaying help or version; help takes
+precedence if both flags are present.
+
+The summary reports attempt/response/failure counts, HTML pages processed,
+discoveries, and remaining queued URLs. Exit status is 1 if any fetch failed,
+otherwise 0 (including a page-limit stop). HTTP 4xx/5xx responses alone do not
+cause a nonzero exit. `--max-pages 0` validates the seed without making requests.
+For a reproducible local demonstration that launches and cleans up the fixture:
+
+```bash
+python3 tests/http_server.py ./build/fluxcrawl --crawl-cli
+```
 
 ## URL subsystem
 
@@ -174,8 +185,8 @@ if (url) {
 
 `HttpClient(HttpClientOptions = {})` validates options and initializes libcurl.
 `fetch(const Url&) const` performs one blocking logical GET (including redirects),
-without retrying. It does not parse HTML or access crawl state. The production CLI
-is unchanged; the integration tests demonstrate fetching.
+without retrying. It does not parse HTML or access crawl state. The sequential
+crawler and CLI compose it with those separate components.
 
 `HttpResponse` contains requested and normalized effective URLs, the numeric HTTP
 status, the supplied Content-Type (empty when absent), a binary-safe `std::string`
@@ -224,6 +235,62 @@ exceeded body limits, connection failure, request timeout, redirect loops and pr
 restrictions, invalid effective URLs, truncated bodies, user agents, and option
 validation. TLS verification is preserved but a local TLS fixture is not included.
 
+## Sequential crawler
+
+`SequentialCrawler(HttpClientOptions = {})` owns a configured blocking client.
+`crawl(const Url& seed, const CrawlOptions& = {}) const` creates fresh per-crawl
+state. `CrawlOptions` contains `max_depth = 2`, `max_pages = 100`, and
+`same_host_only = false`. There is exactly one active transfer at a time.
+
+```text
+Seed -> CrawlState -> SequentialCrawler -> HttpClient -> HttpResponse
+            ^               |                               |
+            |               +-- successful HTML ------------+
+            |                           |
+            +-- discovered URLs <- HtmlLinkExtractor
+```
+
+Each iteration pops FIFO work, records a fetch attempt, and processes the fetch
+result. Only 2xx responses with the exact case-insensitive media type `text/html`
+(ignoring surrounding whitespace and parameters) are extracted. At maximum depth,
+the response is recorded without extracting links. Other statuses, missing types,
+and non-HTML types never produce discoveries. Extraction uses the effective URL
+after redirects. Fetch errors are recorded and the remaining queue continues;
+there are no retries. Malformed HTML uses the existing parser's recovery behavior.
+
+All discoveries go through `CrawlState::discover_from`; no second seen set exists.
+Depth 0 is the seed, and limits are inclusive. FIFO and parser document order yield
+BFS. `max_pages` counts logical fetch attempts, including failures and HTTP errors;
+redirect hops are part of the same attempt. Zero pages performs no fetches, leaving
+the seed discovered and pending. The final permitted response is still processed,
+so it can leave discoveries queued when the page budget is exhausted.
+
+`CrawlResult` contains `pages_attempted`, `responses_received`, `fetch_failures`,
+`html_pages_processed`, `urls_discovered`, `urls_pending`, and ordered `records`.
+Discovered means accepted into crawl state, including the seed; attempted means
+`fetch` was invoked; responded means an `HttpResponse` was returned. Fetch failures
+include all `HttpError` categories, including client limits and invalid metadata.
+HTML processed counts actual extraction calls, excluding depth-boundary pages.
+Each record stores its `CrawlItem` and either response metadata (effective URL,
+status, content type, decoded bytes) or the original `HttpError`. Bodies are released
+after each iteration, not retained in the result.
+
+Same-host policy compares normalized hosts exactly, ignores ports and schemes,
+and filters discoveries only. It does not restrict HTTP redirects. Redirect aliases
+remain separate requested identities: reaching a final URL by redirect does not
+mark that final URL separately seen, so it can be fetched again if independently
+discovered. Page limits bound attempts, not the size of the discovered frontier.
+These semantics are explicit reference behavior for later engines; concurrent
+completion order, shared-state synchronization, and in-flight termination remain
+future work. No robots.txt, rate limiting, or retries are implemented.
+
+The loopback crawl graph has `/crawl/ -> [a,b,shared,redirect-start]`,
+`a -> [deep,shared]`, `b -> [shared,/crawl/]`, and
+`redirect-start -> redirected/index.html -> child.html`. Tests assert BFS order,
+deduplication, zero/inclusive limits, failure accounting and continuation, 404/503
+handling, malformed HTML recovery, MIME gating, redirect bases, and host filtering.
+The CLI fixture also asserts the physical server request sequence.
+
 ## Layout
 
 - `include/fluxcrawl/`: public version, URL, and HTML extractor headers.
@@ -234,6 +301,9 @@ validation. TLS verification is preserved but a local TLS fixture is not include
 - `include/fluxcrawl/crawl_frontier.hpp` and `crawl_state.hpp`: public crawl work
   and state APIs, implemented by the corresponding `.cpp` files in `src/`.
 - `src/main.cpp`: thin command-line entrypoint.
+- `include/fluxcrawl/sequential_crawler.hpp` and `src/sequential_crawler.cpp`:
+  sequential orchestration, options, and metadata-only crawl results.
+- `src/http_response.cpp`: reusable HTML media-type check.
 - `cmake/`: target-scoped compiler warning configuration.
 - `tests/`: offline CTest CLI, version, URL, and HTML extraction checks, without
   a test framework. HTML tests block external resource loading with a test-only
