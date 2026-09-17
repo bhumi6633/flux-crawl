@@ -1,7 +1,7 @@
 """Run one C++ integration test against a loopback-only HTTP fixture."""
 
 import gzip
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 import os
 import socket
 import subprocess
@@ -9,11 +9,13 @@ import sys
 import time
 import threading
 from collections import Counter
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+from local_http import LocalHttpServer
 
 
-class FixtureServer(ThreadingHTTPServer):
-    daemon_threads = False
-    request_queue_size = 128
+FixtureServer = LocalHttpServer
 
 
 class Handler(BaseHTTPRequestHandler):

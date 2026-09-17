@@ -30,3 +30,7 @@ compile_commands.json
 *.swo
 *~
 /.idea/
+
+# Python fixture caches and local benchmark exports
+__pycache__/
+/benchmark_results.csv
