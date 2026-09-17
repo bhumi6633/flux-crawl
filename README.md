@@ -8,7 +8,8 @@ asynchronous I/O.
 information, a crawl CLI, an HTTP/HTTPS URL value type, and HTML anchor link
 extraction, plus in-memory FIFO crawl state and global discovery deduplication.
 The sequential, blocking thread-pool, and event-driven libcurl `curl_multi` engines
-are implemented. There is no benchmark data yet.
+are implemented, with shared timing metrics and a reproducible local benchmark harness.
+No general performance ranking is claimed.
 
 ## Build
 
@@ -54,7 +55,8 @@ precedence if both flags are present.
 any other engine is rejected. `--engine async` uses one event loop with up to eight
 simultaneous transfers by default; `--concurrency N` changes that limit and must be
 positive. Supplying it to sequential or threaded mode is rejected. Summaries identify
-the engine and its worker/transfer limit. No throughput or speedup claims are reported.
+the engine and its worker/transfer limit. Ordinary crawl summaries retain their
+existing fields; benchmark mode reports metrics.
 
 The summary reports attempt/response/failure counts, HTML pages processed,
 discoveries, and remaining queued URLs. Exit status is 1 if any fetch failed,
@@ -375,7 +377,7 @@ shared target receives exactly one request. There are no timing speedup assertio
 Local verification used AppleClang 16: all tests passed under ASan/UBSan, and the
 threaded engine/CLI passed TSan without race reports. Linked system libraries are
 not rebuilt with sanitizers, so this is evidence for the exercised paths rather
-than a proof of all possible schedules. No benchmark framework is implemented.
+than a proof of all possible schedules.
 
 ## Event-driven async crawler
 
@@ -500,6 +502,170 @@ The local fixture uses HTTP/1.0 close-after-response behavior, so it does not te
 connection reuse or TLS. Resolver, TLS, HTTP version, and connection policy need
 explicit control in later experiments. No engine performance ranking is claimed.
 
+## Metrics and reproducible benchmarks
+
+FluxCrawl does not assume that threads or async I/O are faster. It runs the same
+deterministic crawl workload through each engine and records the resulting
+behavior. Engine scheduling and connection management are unchanged in this phase.
+
+```text
+                    Deterministic workload
+                     /        |        \
+                Sequential Threaded    Async
+                     \        |        /
+                       Shared metrics
+                             |
+                       BenchmarkReport
+                         /         \
+                       CLI         CSV
+```
+
+`CrawlRecord::latency` and `CrawlResult::elapsed` use `steady_clock` durations stored
+as nanoseconds. Sequential/threaded request latency starts immediately before
+`HttpClient::fetch` and ends when it returns. Async latency starts immediately
+before adding the configured easy handle and ends when the event loop observes
+its `CURLMSG_DONE`. Easy setup failures record their setup duration. Both include
+redirects and failed attempts, exclude frontier queue time, and stop before that
+response's HTML extraction. Blocking latency includes easy setup/result conversion
+and cleanup; async timing includes event-loop observation delay (including work on
+previous completions) and excludes easy configuration/metadata conversion. These
+are client-observed active durations, not isolated server or wire latency.
+
+Crawl elapsed covers the crawl call from state initialization through result
+aggregation, including request waiting, parsing, scheduling, worker startup/join,
+and async multi cleanup. Engine construction and benchmark control requests are
+outside that interval; final local-container destruction on return is also outside.
+`bytes_downloaded` sums decoded retained bodies from all `HttpResponse` outcomes,
+including HTTP error statuses. It excludes headers, compressed wire size, redirect
+intermediate bodies, and partial bodies discarded on client failures. Existing
+`fetch_failures` counts all `HttpError` categories, so CSV does not relabel it as
+transport-only failures. Records retain metadata and durations, never bodies.
+
+`crawl_metrics(result)` derives:
+
+- `attempts_per_second = pages_attempted / elapsed_seconds` (primary rate).
+- `responses_per_second = responses_received / elapsed_seconds`.
+- `bytes_per_second = bytes_downloaded / elapsed_seconds`.
+- P50/P95/P99 over every recorded attempt, including failures, with nearest rank:
+  sort N observations, then select index `ceil(p * N / 100) - 1`.
+
+Empty observations yield unavailable percentiles. Nonpositive elapsed time yields
+unavailable rates; zero attempts with positive elapsed yields zero rates. CSV uses
+empty fields for unavailable values; the table uses `NA`. Tests cover empty,
+single, two, five, and 1,000-observation sets, and known rate arithmetic.
+
+Build Release for measurements; sanitizer and Debug runs are correctness checks:
+
+```bash
+cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release
+cmake --build build-release
+```
+
+Start the server in one terminal:
+
+```bash
+python3 tools/benchmark_server.py --port 8080 \
+  --pages 50 --fanout 4 --delay-ms 20 --body-bytes 1024
+```
+
+It prints its seed URL. Port 0 selects an available port. In another terminal:
+
+```bash
+./build-release/fluxcrawl benchmark \
+  --seed http://127.0.0.1:8080/page/0 \
+  --engines sequential,threaded,async --concurrency 1,2,4 \
+  --depth 20 --max-pages 50 --runs 2 --warmups 1 \
+  --output benchmark_results.csv
+```
+
+Stop the server with Ctrl-C. The production binary never starts Python. The CLI
+exclusively creates a new CSV file and rejects existing or unwritable paths before
+running trials. An unsuccessful run removes its newly created output. Omit
+`--output` for table-only output. No report or CSV rows are emitted until all trials
+validate. `fluxcrawl benchmark --help` lists defaults and options. Build type and
+FluxCrawl version are recorded; a non-Release build prints a notice but can run.
+
+The generated site is a connected tree: page i links to children `fanout*i+1`
+through `fanout*i+fanout`, stopping before `pages`. IDs are `/page/0`, `/page/1`, etc.
+Every response is HTTP 200 `text/html`, padded with spaces to exactly `body-bytes`.
+Too-small bodies are rejected, rather than silently changing payload sizes. The
+server supports 1..100,000 pages, fanout 1..1,000, delay 0..10,000 ms, and bodies up
+to 1 MiB. Artificial delay represents server/network waiting without internet
+variance. Defaults are modest: 50 pages, fanout 4, delay 20 ms, body 1 KiB.
+
+The concurrent server shares the correctness fixture's `ThreadingHTTPServer` base,
+with a connection backlog of 128. It counts total requests, unique page IDs,
+current work, and peak work under a lock. Server work ends before response dispatch
+so completed-handler teardown cannot overcount replacement requests. Control
+endpoints `/__benchmark/config`, `/__benchmark/reset`, and `/__benchmark/stats`
+are excluded from those counters and client metrics. Reset rejects outstanding
+work; the runner checks idle state and request totals after every trial. Use a
+dedicated server per benchmark invocation; concurrent benchmark drivers are not
+supported. No traffic from other clients should share it.
+
+`BenchmarkConfig` selects seed, crawl limits, engines, concurrency levels, measured
+runs, and optional warmup sweeps. `BenchmarkRunner::run` returns a `BenchmarkReport`
+with compact `BenchmarkSample` rows, workload metadata, and per-configuration
+medians. Each trial constructs fresh engine and crawl state. Duplicate engines or
+levels are deduplicated; ordering is repetition-major, then sequential, threaded
+in increasing concurrency, and async in increasing concurrency. Sequential runs
+once per repetition at concurrency 1. For threaded, concurrency counts workers;
+for async, it caps simultaneous transfers. Warmup sweeps use every configuration
+and are validated but never included in samples or medians. Connections are not
+kept across independent trials.
+
+The runner accepts only the supplied server protocol at a literal
+`http://127.0.0.1:<port>/page/0` seed. All engines bypass environment proxies, disable
+redirect following, and filter discoveries to the seed host during benchmarks.
+The controlled workload has no redirects, and these settings are identical for
+all three engines. Ordinary crawler proxy/redirect defaults remain unchanged.
+The server client module handles control traffic; the runner delegates all crawl
+networking to the existing engines.
+
+Expected work is computed from the server's page count/fanout and the selected
+depth. Every accepted trial must have the exact expected requested URL/depth set,
+no duplicates or fetch failures, HTTP 200 HTML metadata, the exact body-byte total,
+no pending URLs, and matching server total/unique counts with peak work at or below
+configured concurrency. A lower depth intentionally benchmarks its known reachable
+subset. A nonzero page budget smaller than that subset is rejected: truncating
+completion-dependent frontiers can select different workloads across engines.
+Zero pages is supported as an empty measurement with zero requests. Missing links,
+wrong bodies, or engine mismatches invalidate the run instead of appearing as wins.
+
+CSV uses stable columns, a classic numeric locale, decimal milliseconds with six
+fractional digits, raw byte counts, and quoted/escaped string metadata. It records
+version, build, seed, workload parameters, limits, expected count, warmups, engine,
+configured concurrency, run, counters, elapsed, the three rates, latency sample
+count/P50/P95/P99, and explicitly labeled server observations. Each measured trial
+has one row. The console also shows median elapsed and median attempts/sec across
+runs per configuration (arithmetic midpoint for even counts); unavailable rates
+are excluded from rate medians. Percentiles remain per-request within each trial,
+not percentiles of per-run percentiles.
+
+The test suite checks graph connectivity and exact payload size, arithmetic,
+percentiles, median calculations, CSV quoting/locale/empty values, three-engine
+samples, 12-row repetition sweeps, warmup exclusion, zero work, depth subsets,
+invalid arguments/paths, existing-file preservation, proxy bypass, and deliberate
+missing-link rejection. CI makes no throughput or speedup assertions.
+
+Step 8 verification on AppleClang 16 passed all 45 tests in normal and ASan/UBSan
+builds. A Release smoke run used 50 pages, fanout 4, delay 20 ms, and 1 KiB bodies,
+with sequential plus threaded/async at 1/2/4, two measured repetitions and one
+excluded warmup sweep. All 14 samples validated 50 responses, 51,200 decoded
+bytes, and zero failures. This verifies the harness; timings are not permanent
+performance claims.
+
+Interpret measurements with the environment in mind: client and Python server
+compete for resources on one machine; Python thread creation, the GIL, accept
+backlog, and body generation can dominate at high concurrency or zero delay. The
+server uses HTTP/1.0 with connection close, without TLS or compression, so this
+workload does not exercise persistent connection reuse. Native libcurl reuse
+behavior remains unchanged in the engines. Depth barriers, async parsing on the
+event loop, resolver choice, build options, and OS scheduling affect results.
+CPU time, RSS, and context switches are deferred to a later profiling module.
+This harness establishes reproducible observations; it does not establish a
+general engine ranking or include optimization, retries, rate limiting, or persistence.
+
 ## Layout
 
 - `include/fluxcrawl/`: public version, URL, and HTML extractor headers.
@@ -509,7 +675,10 @@ explicit control in later experiments. No engine performance ranking is claimed.
   blocking HTTP API and implementation.
 - `include/fluxcrawl/crawl_frontier.hpp` and `crawl_state.hpp`: public crawl work
   and state APIs, implemented by the corresponding `.cpp` files in `src/`.
-- `src/main.cpp`: thin command-line entrypoint.
+- `src/main.cpp`: crawl entrypoint; `src/benchmark_cli.*`: benchmark argument/output handling.
+- `include/fluxcrawl/metrics.hpp`, `src/metrics.cpp`: portable rates and latency percentiles.
+- `include/fluxcrawl/benchmark.hpp`, `src/benchmark*.cpp`: runner, reports, control client, and CSV/table output.
+- `tools/benchmark_server.py`: deterministic benchmark site; `tools/local_http.py`: shared server base.
 - `include/fluxcrawl/sequential_crawler.hpp` and `src/sequential_crawler.cpp`:
   sequential orchestration.
 - `include/fluxcrawl/crawl_types.hpp`: shared options and metadata-only results.
