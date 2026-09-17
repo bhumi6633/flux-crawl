@@ -21,9 +21,15 @@ int main(int argc, char* argv[])
     http.request_timeout = std::chrono::milliseconds{5000};
     const auto identities = [&](const fluxcrawl::CrawlResult& result) {
         std::map<std::string, std::size_t> entries;
+        std::size_t bytes = 0;
         for (const auto& record : result.records) {
+            check(record.latency.count() >= 0 && record.latency <= result.elapsed, "active latency bounded by crawl elapsed");
+            if (const auto* response = std::get_if<fluxcrawl::CrawlResponseMetadata>(&record.outcome)) {
+                bytes += response->downloaded_bytes;
+            }
             check(entries.emplace(record.item.url.canonical(), record.item.depth).second, "no duplicate attempts");
         }
+        check(bytes == result.bytes_downloaded, "decoded body byte total");
         check(result.pages_attempted == result.records.size(), "record accounting");
         check(result.pages_attempted == result.responses_received + result.fetch_failures, "outcome accounting");
         check(result.urls_discovered == result.pages_attempted + result.urls_pending, "discovery accounting");

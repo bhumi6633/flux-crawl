@@ -11,6 +11,7 @@ SequentialCrawler::SequentialCrawler(HttpClientOptions http_options) : client_{s
 
 CrawlResult SequentialCrawler::crawl(const Url& seed, const CrawlOptions& options) const
 {
+    const auto started = std::chrono::steady_clock::now();
     CrawlState state{seed, options.max_depth};
     CrawlResult result;
     while (!state.empty() && result.pages_attempted < options.max_pages) {
@@ -23,6 +24,7 @@ CrawlResult SequentialCrawler::crawl(const Url& seed, const CrawlOptions& option
     }
     result.urls_discovered = state.seen_count();
     result.urls_pending = state.frontier_size();
+    result.elapsed = std::chrono::steady_clock::now() - started;
     return result;
 }
 

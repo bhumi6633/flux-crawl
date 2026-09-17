@@ -71,3 +71,8 @@ set_tests_properties(core.async_crawler PROPERTIES TIMEOUT 90)
 add_test(NAME cli.async COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/http_server.py" "$<TARGET_FILE:fluxcrawl>" --async-cli)
 set_tests_properties(cli.async PROPERTIES TIMEOUT 30)
+
+add_executable(fluxcrawl_metrics_test metrics_test.cpp)
+target_link_libraries(fluxcrawl_metrics_test PRIVATE FluxCrawl::core)
+fluxcrawl_enable_warnings(fluxcrawl_metrics_test)
+add_test(NAME core.metrics COMMAND fluxcrawl_metrics_test)

@@ -12,7 +12,7 @@ struct ProcessedPage {
     bool html_processed = false;
 };
 
-ProcessedPage process_response(HttpResult fetched, CrawlItem item, const CrawlOptions& options);
+ProcessedPage process_response(HttpResult fetched, CrawlItem item, const CrawlOptions& options, std::chrono::nanoseconds latency);
 ProcessedPage process_page(const HttpClient& client, CrawlItem item, const CrawlOptions& options);
 void publish_page(CrawlState& state, CrawlResult& result, ProcessedPage page,
                   const Url& seed, const CrawlOptions& options);

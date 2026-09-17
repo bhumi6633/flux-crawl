@@ -96,11 +96,16 @@ ThreadPoolCrawler::ThreadPoolCrawler(std::size_t workers, HttpClientOptions http
 
 CrawlResult ThreadPoolCrawler::crawl(const Url& seed, const CrawlOptions& options) const
 {
+    const auto started = std::chrono::steady_clock::now();
     // Initialize libxml2 on the calling thread. HttpClient already initialized curl.
     const HtmlLinkExtractor initialized_parser;
     (void)initialized_parser;
     Coordinator coordinator{seed, options};
-    if (options.max_pages == 0) { return coordinator.finish(); }
+    if (options.max_pages == 0) {
+        auto result = coordinator.finish();
+        result.elapsed = std::chrono::steady_clock::now() - started;
+        return result;
+    }
     std::vector<std::thread> workers;
     workers.reserve(workers_);
     try {
@@ -125,7 +130,9 @@ CrawlResult ThreadPoolCrawler::crawl(const Url& seed, const CrawlOptions& option
         coordinator.fail(std::current_exception(), false);
     }
     for (auto& worker : workers) { worker.join(); }
-    return coordinator.finish();
+    auto result = coordinator.finish();
+    result.elapsed = std::chrono::steady_clock::now() - started;
+    return result;
 }
 
 } // namespace fluxcrawl

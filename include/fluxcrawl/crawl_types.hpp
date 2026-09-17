@@ -4,6 +4,7 @@
 #include <fluxcrawl/http_response.hpp>
 
 #include <vector>
+#include <chrono>
 
 namespace fluxcrawl {
 
@@ -23,6 +24,8 @@ struct CrawlResponseMetadata {
 struct CrawlRecord {
     CrawlItem item;
     std::variant<CrawlResponseMetadata, HttpError> outcome;
+    // Active transfer duration; excludes frontier wait and HTML processing.
+    std::chrono::nanoseconds latency{};
 };
 
 struct CrawlResult {
@@ -33,6 +36,9 @@ struct CrawlResult {
     std::size_t html_pages_processed = 0;
     std::size_t urls_discovered = 0; // Accepted by CrawlState, including the seed.
     std::size_t urls_pending = 0;
+    std::chrono::nanoseconds elapsed{};
+    // Sum of decoded body bytes in HttpResponse outcomes; excludes partial failed bodies.
+    std::size_t bytes_downloaded = 0;
     std::vector<CrawlRecord> records; // Sequential attempt order or concurrent publication order; no bodies.
 };
 

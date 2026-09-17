@@ -22,6 +22,7 @@ struct ActiveTransfer {
         : item{std::move(pending)}, request{item.url, options} {}
     CrawlItem item;
     detail::CurlTransfer request;
+    std::chrono::steady_clock::time_point started;
 };
 
 class MultiTransfers {
@@ -48,6 +49,7 @@ public:
         auto* easy = transfer->request.handle.get();
         // Allocate the map node BEFORE attaching: a failed allocation owns no attachment.
         active.emplace(easy, std::move(transfer));
+        active.at(easy)->started = std::chrono::steady_clock::now();
         const auto code = curl_multi_add_handle(handle, easy);
         if (code != CURLM_OK) {
             active.erase(easy);
@@ -87,15 +89,16 @@ AsyncCrawler::AsyncCrawler(std::size_t concurrency, HttpClientOptions http_optio
 
 CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
 {
+    const auto started = std::chrono::steady_clock::now();
     CrawlState state{seed, options.max_depth};
     CrawlResult result;
     auto ready = state.next(); // Lookahead stays pending until committed to an attempt.
     std::size_t active_depth = 0;
     MultiTransfers transfers;
 
-    const auto publish = [&](HttpResult response, CrawlItem item) {
+    const auto publish = [&](HttpResult response, CrawlItem item, std::chrono::nanoseconds latency) {
         detail::publish_page(state, result,
-            detail::process_response(std::move(response), std::move(item), options), seed, options);
+            detail::process_response(std::move(response), std::move(item), options, latency), seed, options);
         if (!ready) { ready = state.next(); }
     };
     const auto fill = [&] {
@@ -106,9 +109,11 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
             ready = state.next();
             active_depth = item.depth;
             ++result.pages_attempted;
+            const auto setup_started = std::chrono::steady_clock::now();
             auto transfer = std::make_unique<ActiveTransfer>(std::move(item), http_options_);
             if (transfer->request.setup != CURLE_OK) {
-                publish(transfer->request.finish(transfer->request.setup), std::move(transfer->item));
+                publish(transfer->request.finish(transfer->request.setup), std::move(transfer->item),
+                        std::chrono::steady_clock::now() - setup_started);
             } else {
                 transfers.add(std::move(transfer));
                 added = true;
@@ -125,9 +130,10 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
         while (auto* message = curl_multi_info_read(transfers.handle, &remaining)) {
             if (message->msg != CURLMSG_DONE) { continue; }
             // The message storage becomes invalid after removal. Copy its result first.
+            const auto completed = std::chrono::steady_clock::now();
             const auto code = message->data.result;
             auto transfer = transfers.remove(message->easy_handle);
-            publish(transfer->request.finish(code), std::move(transfer->item));
+            publish(transfer->request.finish(code), std::move(transfer->item), completed - transfer->started);
         }
         // Refill after draining completions, before waiting on any remaining siblings.
         // Preserve BFS depth barriers, but never wait for a whole same-depth batch.
@@ -140,6 +146,7 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
     transfers.close();
     result.urls_discovered = state.seen_count();
     result.urls_pending = state.frontier_size() + (ready ? 1U : 0U);
+    result.elapsed = std::chrono::steady_clock::now() - started;
     return result;
 }
 

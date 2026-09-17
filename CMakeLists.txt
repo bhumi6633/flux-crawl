@@ -22,7 +22,8 @@ add_library(fluxcrawl_core
     src/crawl_processing.cpp
     src/sequential_crawler.cpp
     src/thread_pool_crawler.cpp
-    src/async_crawler.cpp)
+    src/async_crawler.cpp
+    src/metrics.cpp)
 add_library(FluxCrawl::core ALIAS fluxcrawl_core)
 target_include_directories(fluxcrawl_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_compile_features(fluxcrawl_core PUBLIC cxx_std_20)

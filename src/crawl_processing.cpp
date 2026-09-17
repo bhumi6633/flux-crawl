@@ -7,14 +7,17 @@ namespace fluxcrawl::detail {
 
 ProcessedPage process_page(const HttpClient& client, CrawlItem item, const CrawlOptions& options)
 {
+    const auto started = std::chrono::steady_clock::now();
     auto fetched = client.fetch(item.url);
-    return process_response(std::move(fetched), std::move(item), options);
+    const auto latency = std::chrono::steady_clock::now() - started;
+    return process_response(std::move(fetched), std::move(item), options, latency);
 }
 
-ProcessedPage process_response(HttpResult fetched, CrawlItem item, const CrawlOptions& options)
+ProcessedPage process_response(HttpResult fetched, CrawlItem item, const CrawlOptions& options,
+                               std::chrono::nanoseconds latency)
 {
     if (auto* error = std::get_if<HttpError>(&fetched)) {
-        return {{std::move(item), std::move(*error)}, {}, false};
+        return {{std::move(item), std::move(*error), latency}, {}, false};
     }
     auto& response = std::get<HttpResponse>(fetched);
     const bool parse = response.status_code >= 200 && response.status_code < 300
@@ -22,7 +25,7 @@ ProcessedPage process_response(HttpResult fetched, CrawlItem item, const CrawlOp
     auto links = parse ? HtmlLinkExtractor{}.extract_links(response.body, response.effective_url)
                        : std::vector<Url>{};
     return {{std::move(item), CrawlResponseMetadata{std::move(response.effective_url),
-             response.status_code, std::move(response.content_type), response.downloaded_bytes}},
+             response.status_code, std::move(response.content_type), response.downloaded_bytes}, latency},
             std::move(links), parse};
 }
 
@@ -33,6 +36,7 @@ void publish_page(CrawlState& state, CrawlResult& result, ProcessedPage page,
         ++result.fetch_failures;
     } else {
         ++result.responses_received;
+        result.bytes_downloaded += std::get<CrawlResponseMetadata>(page.record.outcome).downloaded_bytes;
     }
     if (page.html_processed) { ++result.html_pages_processed; }
     for (const auto& link : page.links) {
