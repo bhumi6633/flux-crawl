@@ -1,3 +1,4 @@
+#include "benchmark_cli.hpp"
 #include <fluxcrawl/version.hpp>
 #include <fluxcrawl/url.hpp>
 #include <fluxcrawl/sequential_crawler.hpp>
@@ -16,7 +17,8 @@ void print_help()
     std::cout << "FluxCrawl: a C++20 network-concurrency engineering project.\n"
                  "Sequential, threaded, and event-driven HTTP/HTTPS crawler.\n\n"
                  "Usage:\n"
-                 "  fluxcrawl [options] <seed-url>\n\n"
+                 "  fluxcrawl [options] <seed-url>\n"
+                 "  fluxcrawl benchmark --help\n\n"
                  "Options:\n"
                  "  --engine NAME   sequential (default), threaded, or async\n"
                  "  --workers N     Threaded workers (default: 4; must be positive)\n"
@@ -33,6 +35,7 @@ void print_help()
 
 int main(int argc, char* argv[])
 {
+    if (argc > 1 && std::string_view{argv[1]} == "benchmark") { return benchmark_main(argc, argv); }
     bool show_help = false;
     bool show_version = false;
     std::string_view seed;

@@ -13,6 +13,7 @@ struct HttpClientOptions {
     long max_redirects = 10;
     std::size_t max_body_bytes = 8 * 1024 * 1024;
     std::string user_agent = "FluxCrawl/" + std::string{version};
+    bool use_environment_proxy = true;
 };
 
 class HttpClient {

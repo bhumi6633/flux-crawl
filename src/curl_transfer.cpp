@@ -95,6 +95,7 @@ CurlTransfer::CurlTransfer(const Url& requested, const HttpClientOptions& option
     set(CURLOPT_CONNECTTIMEOUT_MS, static_cast<long>(options.connect_timeout.count()));
     set(CURLOPT_TIMEOUT_MS, static_cast<long>(options.request_timeout.count()));
     set(CURLOPT_NOSIGNAL, 1L);
+    if (!options.use_environment_proxy) { set(CURLOPT_PROXY, ""); }
     set(CURLOPT_USERAGENT, options.user_agent.c_str());
     set(CURLOPT_ACCEPT_ENCODING, "");
     set(CURLOPT_WRITEFUNCTION, &receive);

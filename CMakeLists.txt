@@ -23,14 +23,18 @@ add_library(fluxcrawl_core
     src/sequential_crawler.cpp
     src/thread_pool_crawler.cpp
     src/async_crawler.cpp
-    src/metrics.cpp)
+    src/metrics.cpp
+    src/benchmark.cpp
+    src/benchmark_server_client.cpp
+    src/benchmark_output.cpp)
 add_library(FluxCrawl::core ALIAS fluxcrawl_core)
 target_include_directories(fluxcrawl_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_compile_features(fluxcrawl_core PUBLIC cxx_std_20)
 target_link_libraries(fluxcrawl_core PRIVATE CURL::libcurl LibXml2::LibXml2 Threads::Threads)
+target_compile_definitions(fluxcrawl_core PRIVATE FLUXCRAWL_BUILD_TYPE="$<CONFIG>")
 fluxcrawl_enable_warnings(fluxcrawl_core)
 
-add_executable(fluxcrawl src/main.cpp)
+add_executable(fluxcrawl src/main.cpp src/benchmark_cli.cpp)
 target_link_libraries(fluxcrawl PRIVATE FluxCrawl::core)
 fluxcrawl_enable_warnings(fluxcrawl)
 
