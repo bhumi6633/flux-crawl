@@ -76,3 +76,13 @@ add_executable(fluxcrawl_metrics_test metrics_test.cpp)
 target_link_libraries(fluxcrawl_metrics_test PRIVATE FluxCrawl::core)
 fluxcrawl_enable_warnings(fluxcrawl_metrics_test)
 add_test(NAME core.metrics COMMAND fluxcrawl_metrics_test)
+
+add_test(NAME benchmark.server_graph COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/benchmark_server_test.py")
+
+add_executable(fluxcrawl_benchmark_test benchmark_test.cpp)
+target_link_libraries(fluxcrawl_benchmark_test PRIVATE FluxCrawl::core)
+fluxcrawl_enable_warnings(fluxcrawl_benchmark_test)
+add_test(NAME benchmark.arithmetic_csv COMMAND fluxcrawl_benchmark_test)
+add_test(NAME benchmark.integration COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/benchmark_integration.py" "$<TARGET_FILE:fluxcrawl_benchmark_test>" "$<TARGET_FILE:fluxcrawl>")
+set_tests_properties(benchmark.integration PROPERTIES TIMEOUT 90)
