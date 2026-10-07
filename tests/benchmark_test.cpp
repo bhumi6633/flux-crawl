@@ -26,21 +26,21 @@ int main(int argc, char* argv[])
     sample.metrics.attempts_per_second = 50;
     sample.metrics.responses_per_second = 40;
     sample.metrics.bytes_per_second = 500;
-    sample.metrics.latency = {100, 10ms, 20ms, 30ms};
+    sample.metrics.latency = {100, 10ms, 20ms, 30ms, 15.5, 1ms, 40ms};
     sample.server_requests = 100; sample.server_peak_active = 1;
     report.samples = {sample, {}};
     std::ostringstream output;
     output.imbue(std::locale{std::locale::classic(), new CommaPunctuation});
     fluxcrawl::write_benchmark_csv(output, report);
-    const std::string expected_header = "version,build_type,seed,workload_pages,fanout,delay_ms,body_bytes,max_depth,max_pages,expected_pages,warmups,engine,configured_concurrency,run,pages_attempted,responses_received,fetch_failures,bytes_downloaded,elapsed_ms,attempts_per_second,responses_per_second,bytes_per_second,latency_samples,p50_ms,p95_ms,p99_ms,server_requests,server_peak_active\n";
+    const std::string expected_header = "version,build_type,seed,workload_pages,fanout,delay_ms,body_bytes,max_depth,max_pages,expected_pages,warmups,engine,configured_concurrency,run,pages_attempted,responses_received,fetch_failures,bytes_downloaded,elapsed_ms,attempts_per_second,responses_per_second,bytes_per_second,latency_samples,p50_ms,p95_ms,p99_ms,server_requests,server_peak_active,scenario,latency_mean_ms,latency_min_ms,latency_max_ms,measured_runs,started_at_unix_ms\n";
     const std::string prefix = "\"v\"\"1\",\"Test\",\"http://127.0.0.1/page/0\",10,2,5,100,20,100,10,0,sequential,1,1,";
-    check(output.str() == expected_header + prefix + "100,80,20,1000,2000.000000,50.000000,40.000000,500.000000,100,10.000000,20.000000,30.000000,100,1\n"
-          + prefix + "0,0,0,0,0.000000,,,,0,,,,0,0\n", "CSV header, columns, quoting, locale, empty fields, rows, newlines");
+    check(output.str() == expected_header + prefix + "100,80,20,1000,2000.000000,50.000000,40.000000,500.000000,100,10.000000,20.000000,30.000000,100,1,\"custom\",15.500000,1.000000,40.000000,0,0\n"
+          + prefix + "0,0,0,0,0.000000,,,,0,,,,0,0,\"custom\",,,,0,0\n", "CSV header, columns, quoting, locale, empty fields, rows, newlines");
     sample.elapsed = 4s; sample.metrics.attempts_per_second = 25;
     report.samples[1] = sample;
     auto aggregate = fluxcrawl::aggregate_samples(report.samples);
     check(aggregate.size() == 1 && aggregate[0].median_elapsed_ms == 3000
-          && aggregate[0].median_attempts_per_second == 37.5, "even sample median");
+          && aggregate[0].median_attempts_per_second == 37.5 && aggregate[0].elapsed_stddev_ms == 1000, "even sample median");
     report.samples.push_back(sample);
     aggregate = fluxcrawl::aggregate_samples(report.samples);
     check(aggregate[0].median_elapsed_ms == 4000 && aggregate[0].samples == 3, "odd sample median");
@@ -64,7 +64,13 @@ int main(int argc, char* argv[])
         check(actual.samples.size() == 12 && actual.aggregates.size() == 4, "deduplicated 2x2x3 sweep with warmups excluded");
         check(actual.samples[0].engine == fluxcrawl::EngineType::Threaded && actual.samples[0].concurrency == 2
               && actual.samples[4].run == 2 && actual.samples.back().run == 3, "repetition-major increasing concurrency");
-        config.warmups = 0; config.runs = 1; config.crawl.max_pages = 0;
+        config.warmups = 0; config.runs = 1;
+        config.workers = {1, 2}; config.concurrency = {1, 2, 4};
+        actual = fluxcrawl::BenchmarkRunner{}.run(config);
+        check(actual.samples.size() == 5 && actual.samples[1].concurrency == 2
+              && actual.samples.back().concurrency == 4, "independent worker and async sweep sizes");
+        config.workers.clear(); config.concurrency = {2, 4};
+        config.crawl.max_pages = 0;
         actual = fluxcrawl::BenchmarkRunner{}.run(config);
         for (const auto& row : actual.samples) {
             check(row.pages_attempted == 0 && !row.metrics.latency.p50 && row.server_requests == 0, "zero workload metrics");
