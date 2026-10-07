@@ -2,6 +2,7 @@
 
 #include <fluxcrawl/metrics.hpp>
 #include <ostream>
+#include <cstdint>
 #include <string_view>
 
 namespace fluxcrawl {
@@ -17,9 +18,13 @@ struct BenchmarkConfig {
     std::vector<std::size_t> concurrency{1, 2, 4, 8};
     std::size_t runs = 3;
     std::size_t warmups = 0;
+    // Empty worker list preserves the shared concurrency sweep.
+    std::vector<std::size_t> workers{};
+    std::string scenario{}; // Optional assertion against server metadata.
 };
 struct BenchmarkWorkload {
     std::size_t pages = 0, fanout = 0, delay_ms = 0, body_bytes = 0;
+    std::string scenario = "custom";
 };
 struct BenchmarkSample {
     EngineType engine = EngineType::Sequential;
@@ -34,12 +39,15 @@ struct BenchmarkAggregate {
     std::size_t concurrency, samples;
     double median_elapsed_ms;
     std::optional<double> median_attempts_per_second;
+    double elapsed_stddev_ms = 0; // Population standard deviation across measured trials.
 };
 struct BenchmarkReport {
     std::string seed;
     BenchmarkWorkload workload;
     std::size_t max_depth = 0, max_pages = 0, expected_pages = 0, warmups = 0;
     std::string version, build_type;
+    std::size_t measured_runs = 0;
+    std::int64_t started_at_unix_ms = 0; // Reproducibility metadata only; never used for durations.
     std::vector<BenchmarkSample> samples;
     std::vector<BenchmarkAggregate> aggregates;
 };

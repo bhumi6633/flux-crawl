@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cmath>
 #include <limits>
 #include <map>
 #include <stdexcept>
@@ -78,8 +79,18 @@ std::vector<BenchmarkAggregate> aggregate_samples(std::span<const BenchmarkSampl
             elapsed.push_back(std::chrono::duration<double, std::milli>(sample->elapsed).count());
             if (sample->metrics.attempts_per_second) { rates.push_back(*sample->metrics.attempts_per_second); }
         }
+        // Welford's update avoids subtracting large, nearly equal squared sums.
+        double mean = 0, m2 = 0;
+        std::size_t count = 0;
+        for (const double value : elapsed) {
+            ++count;
+            const double delta = value - mean;
+            mean += delta / static_cast<double>(count);
+            m2 += delta * (value - mean);
+        }
+        const double deviation = std::sqrt(std::max(0.0, m2 / static_cast<double>(count)));
         result.push_back({key.first, key.second, group.size(), median(std::move(elapsed)),
-                          rates.empty() ? std::nullopt : std::optional{median(std::move(rates))}});
+                          rates.empty() ? std::nullopt : std::optional{median(std::move(rates))}, deviation});
     }
     return result;
 }
@@ -90,6 +101,9 @@ BenchmarkReport BenchmarkRunner::run(const BenchmarkConfig& config) const
         || std::find(config.concurrency.begin(), config.concurrency.end(), 0) != config.concurrency.end()) {
         throw std::invalid_argument("Benchmark requires positive runs/concurrency and nonempty engine/concurrency lists");
     }
+    if (config.runs > 10000 || config.warmups > 10000) {
+        throw std::invalid_argument("Benchmark runs and warmups must not exceed 10000");
+    }
     auto engines = config.engines;
     auto levels = config.concurrency;
     for (const auto engine : engines) { (void)engine_name(engine); }
@@ -97,18 +111,39 @@ BenchmarkReport BenchmarkRunner::run(const BenchmarkConfig& config) const
     engines.erase(std::unique(engines.begin(), engines.end()), engines.end());
     std::sort(levels.begin(), levels.end());
     levels.erase(std::unique(levels.begin(), levels.end()), levels.end());
+    auto workers = config.workers.empty() ? levels : config.workers;
+    std::sort(workers.begin(), workers.end());
+    workers.erase(std::unique(workers.begin(), workers.end()), workers.end());
+    if (!config.workers.empty() && std::find(engines.begin(), engines.end(), EngineType::Threaded) == engines.end()) {
+        throw std::invalid_argument("Benchmark --workers requires the threaded engine");
+    }
     std::vector<std::pair<EngineType, std::size_t>> configurations;
     for (const auto engine : engines) {
         if (engine == EngineType::Sequential) { configurations.emplace_back(engine, 1); }
-        else { for (const auto level : levels) { configurations.emplace_back(engine, level); } }
+        else {
+            const auto& selected = engine == EngineType::Threaded ? workers : levels;
+            for (const auto level : selected) {
+                const std::size_t cap = engine == EngineType::Threaded ? 256 : 1024;
+                if (level == 0 || level > cap) {
+                    throw std::invalid_argument("Benchmark limits: workers 1..256, async concurrency 1..1024");
+                }
+                configurations.emplace_back(engine, level);
+            }
+        }
     }
     if (config.runs > std::numeric_limits<std::size_t>::max() / configurations.size()) {
         throw std::invalid_argument("Benchmark run count is too large");
     }
     detail::BenchmarkServerClient server{config.seed};
     BenchmarkReport report;
+    report.started_at_unix_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    report.measured_runs = config.runs;
     report.seed = config.seed.canonical();
     report.workload = server.workload();
+    if (!config.scenario.empty() && config.scenario != report.workload.scenario) {
+        throw std::invalid_argument("Benchmark scenario does not match server metadata");
+    }
     report.max_depth = config.crawl.max_depth;
     report.max_pages = config.crawl.max_pages;
     report.warmups = config.warmups;

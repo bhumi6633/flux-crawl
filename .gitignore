@@ -34,3 +34,5 @@ compile_commands.json
 # Python fixture caches and local benchmark exports
 __pycache__/
 /benchmark_results.csv
+
+/results/

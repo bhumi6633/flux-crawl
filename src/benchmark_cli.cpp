@@ -80,7 +80,8 @@ int benchmark_main(int argc, char* argv[])
             const std::string_view option{argv[index]};
             if (option == "--help") { help = true; continue; }
             if (option != "--seed" && option != "--engines" && option != "--concurrency" && option != "--depth"
-                && option != "--max-pages" && option != "--runs" && option != "--warmups" && option != "--output") {
+                && option != "--max-pages" && option != "--runs" && option != "--warmups" && option != "--output"
+                && option != "--engine" && option != "--workers" && option != "--scenario") {
                 throw std::invalid_argument("Unknown benchmark option: " + std::string{option});
             }
             if (index + 1 >= argc) { throw std::invalid_argument("Missing value for " + std::string{option}); }
@@ -90,20 +91,27 @@ int benchmark_main(int argc, char* argv[])
                 if (!parsed) { throw std::invalid_argument("Invalid benchmark seed URL"); }
                 config.seed = *parsed;
                 has_seed = true;
-            } else if (option == "--engines") {
+            } else if (option == "--engines" || option == "--engine") {
                 config.engines.clear();
                 for (const auto name : split(value)) {
-                    if (name == "sequential") { config.engines.push_back(fluxcrawl::EngineType::Sequential); }
+                    if (name == "all") {
+                        config.engines.insert(config.engines.end(), {fluxcrawl::EngineType::Sequential,
+                            fluxcrawl::EngineType::Threaded, fluxcrawl::EngineType::Async});
+                    } else if (name == "sequential") { config.engines.push_back(fluxcrawl::EngineType::Sequential); }
                     else if (name == "threaded") { config.engines.push_back(fluxcrawl::EngineType::Threaded); }
                     else if (name == "async") { config.engines.push_back(fluxcrawl::EngineType::Async); }
                     else { throw std::invalid_argument("Unknown benchmark engine: " + std::string{name}); }
                 }
-            } else if (option == "--concurrency") {
-                config.concurrency.clear();
+            } else if (option == "--scenario") {
+                if (value.empty()) { throw std::invalid_argument("Empty benchmark scenario"); }
+                config.scenario = value;
+            } else if (option == "--concurrency" || option == "--workers") {
+                auto& levels = option == "--workers" ? config.workers : config.concurrency;
+                levels.clear();
                 for (const auto item : split(value)) {
                     const auto number = integer(item, option);
                     if (number == 0) { throw std::invalid_argument("Benchmark concurrency must be positive"); }
-                    config.concurrency.push_back(number);
+                    levels.push_back(number);
                 }
             } else if (option == "--output") {
                 if (value.empty()) { throw std::invalid_argument("Empty CSV output path"); }
@@ -121,8 +129,11 @@ int benchmark_main(int argc, char* argv[])
         if (help) {
             std::cout << "Usage: fluxcrawl benchmark --seed http://127.0.0.1:<port>/page/0 [options]\n"
                          "Start tools/benchmark_server.py separately; benchmark traffic stays on loopback.\n"
-                         "  --engines LIST     sequential,threaded,async (default: all three)\n"
-                         "  --concurrency LIST Positive levels (default: 1,2,4,8); sequential always 1\n"
+                         "  --engines LIST     sequential,threaded,async or all (default: all)\n"
+                         "  --engine NAME      Alias for --engines\n"
+                         "  --scenario NAME    Require matching server scenario metadata\n"
+                         "  --workers LIST     Override threaded sweep only (maximum 256)\n"
+                         "  --concurrency LIST Shared sweep; async maximum 1024 (default: 1,2,4,8)\n"
                          "  --depth N          Inclusive depth (default: 20)\n"
                          "  --max-pages N      Must cover depth-reachable graph, or 0 (default: 100)\n"
                          "  --runs N           Measured repetitions (default: 3; positive)\n"
@@ -130,7 +141,7 @@ int benchmark_main(int argc, char* argv[])
                          "  --output PATH      CSV; exclusively creates a new file, never overwrites\n"
                          "  --help             Show benchmark help\n"
                          "Threaded concurrency counts workers; async counts active transfers.\n"
-                         "Metrics: active request P50/P95/P99, crawl elapsed, attempts/s, responses/s, bytes/s.\n"
+                         "Metrics: active request mean/min/max/P50/P95/P99, crawl elapsed, attempts/s, responses/s, bytes/s.\n"
                          "Use a Release build for performance comparisons.\n";
             return 0;
         }

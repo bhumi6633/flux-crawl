@@ -1,14 +1,44 @@
 """Deterministic, concurrent HTTP/1.0 benchmark site; binds IPv4 loopback only."""
 import argparse
 from collections import Counter
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler
 import threading
 import time
 from local_http import LocalHttpServer
 
 
+@dataclass(frozen=True)
+class BenchmarkScenario:
+    pages: int
+    fanout: int
+    delay_ms: int
+    body_bytes: int
+
+
+SCENARIOS = {
+    "fast-small": BenchmarkScenario(100, 4, 2, 1024),
+    "latency-bound": BenchmarkScenario(100, 4, 50, 1024),
+    "higher-latency": BenchmarkScenario(100, 4, 150, 1024),
+    "high-fanout": BenchmarkScenario(100, 99, 5, 4096),
+    "large-body": BenchmarkScenario(100, 4, 10, 65536),
+}
+
+
+def scenario_workload(name, **overrides):
+    if name not in SCENARIOS:
+        raise ValueError("unknown benchmark scenario")
+    preset = SCENARIOS[name]
+    parameters = {field: getattr(preset, field) for field in ("pages", "fanout", "delay_ms", "body_bytes")}
+    parameters.update({key: value for key, value in overrides.items() if value is not None})
+    return Workload(**parameters, scenario=name)
+
+
 class Workload:
-    def __init__(self, pages=50, fanout=4, delay_ms=20, body_bytes=1024):
+    def __init__(self, pages=50, fanout=4, delay_ms=20, body_bytes=1024, scenario="custom"):
+        if scenario != "custom" and scenario not in SCENARIOS:
+            raise ValueError("unknown benchmark scenario")
+        self.scenario = scenario
         if not 1 <= pages <= 100000 or not 1 <= fanout <= 1000:
             raise ValueError("pages must be 1..100000 and fanout 1..1000")
         if not 0 <= delay_ms <= 10000 or not 1 <= body_bytes <= 1048576:
@@ -58,7 +88,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         server, workload = self.server, self.server.workload
         if self.path == "/__benchmark/config":
-            text = f"fluxcrawl-benchmark-v1 {workload.pages} {workload.fanout} {workload.delay_ms} {workload.body_bytes}\n"
+            text = f"fluxcrawl-benchmark-v2 {workload.pages} {workload.fanout} {workload.delay_ms} {workload.body_bytes} {workload.scenario}\n"
             self.send_body(200, text.encode())
             return
         if self.path == "/__benchmark/reset":
@@ -101,15 +131,18 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8080)
-    parser.add_argument("--pages", type=int, default=50)
-    parser.add_argument("--fanout", type=int, default=4)
-    parser.add_argument("--delay-ms", type=int, default=20)
-    parser.add_argument("--body-bytes", type=int, default=1024)
+    parser.add_argument("--scenario", choices=SCENARIOS)
+    parser.add_argument("--pages", type=int)
+    parser.add_argument("--fanout", type=int)
+    parser.add_argument("--delay-ms", type=int)
+    parser.add_argument("--body-bytes", type=int)
     args = parser.parse_args()
     if not 0 <= args.port <= 65535:
         parser.error("port must be 0..65535")
     try:
-        workload = Workload(args.pages, args.fanout, args.delay_ms, args.body_bytes)
+        overrides = {field: getattr(args, field) for field in ("pages", "fanout", "delay_ms", "body_bytes")}
+        workload = scenario_workload(args.scenario, **overrides) if args.scenario else Workload(
+            **{key: value for key, value in overrides.items() if value is not None})
     except ValueError as error:
         parser.error(str(error))
     with BenchmarkServer(args.port, workload) as server:
