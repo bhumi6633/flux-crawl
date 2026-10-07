@@ -546,13 +546,16 @@ transport-only failures. Records retain metadata and durations, never bodies.
 - `attempts_per_second = pages_attempted / elapsed_seconds` (primary rate).
 - `responses_per_second = responses_received / elapsed_seconds`.
 - `bytes_per_second = bytes_downloaded / elapsed_seconds`.
-- P50/P95/P99 over every recorded attempt, including failures, with nearest rank:
+- Mean, minimum, maximum, and P50/P95/P99 over recorded attempts, including failures.
+  Percentiles use nearest rank:
   sort N observations, then select index `ceil(p * N / 100) - 1`.
 
-Empty observations yield unavailable percentiles. Nonpositive elapsed time yields
+Empty observations yield unavailable latency statistics. Mean latency uses a
+wide floating-point sum to avoid integer-duration sum overflow. Nonpositive elapsed time yields
 unavailable rates; zero attempts with positive elapsed yields zero rates. CSV uses
 empty fields for unavailable values; the table uses `NA`. Tests cover empty,
-single, two, five, and 1,000-observation sets, and known rate arithmetic.
+single, two, five, and 1,000-observation sets, large durations, negative-input
+rejection, and known rate arithmetic.
 
 Build Release for measurements; sanitizer and Debug runs are correctness checks:
 
@@ -585,6 +588,45 @@ running trials. An unsuccessful run removes its newly created output. Omit
 validate. `fluxcrawl benchmark --help` lists defaults and options. Build type and
 FluxCrawl version are recorded; a non-Release build prints a notice but can run.
 
+Five named scenarios are supplied by `tools/benchmark_server.py`:
+
+| Scenario | Pages | Fanout | Delay (ms) | Body (bytes) |
+|---|---:|---:|---:|---:|
+| `fast-small` | 100 | 4 | 2 | 1024 |
+| `latency-bound` | 100 | 4 | 50 | 1024 |
+| `higher-latency` | 100 | 4 | 150 | 1024 |
+| `high-fanout` | 100 | 99 | 5 | 4096 |
+| `large-body` | 100 | 4 | 10 | 65536 |
+
+`BenchmarkScenario` is a small immutable Python preset model. The C++
+`BenchmarkWorkload` carries the reported scenario name and actual parameters.
+The first three vary waiting time; high fanout exposes all 99 children after the
+seed; large bodies add copying and parsing work. Graphs contain no randomness.
+Server overrides (`--pages`, `--fanout`, `--delay-ms`, `--body-bytes`) take precedence
+over preset values, and the report always records the actual parameters alongside
+the preset name. An undersized body still fails validation.
+
+For a named scenario and unequal sweeps, start the server separately:
+
+```bash
+python3 tools/benchmark_server.py --scenario latency-bound --port 8080 \
+  --pages 20 --delay-ms 50
+```
+
+Then run the comparison (the server is ready when it prints its URL):
+
+```bash
+./build-release/fluxcrawl benchmark --seed http://127.0.0.1:8080/page/0 \
+  --scenario latency-bound --engine all --workers 1,2,4,8 \
+  --concurrency 1,2,4,8,16 --max-pages 20 --runs 2 \
+  --output benchmark_results.csv
+```
+
+Client `--scenario` checks the server's reported name; it does not reconfigure a
+running server. A mismatch fails before any measured trial. Without a preset the
+server reports `custom` and retains the original modest defaults. Protocol v2
+adds the scenario name; the client also accepts v1 metadata as `custom`.
+
 The generated site is a connected tree: page i links to children `fanout*i+1`
 through `fanout*i+fanout`, stopping before `pages`. IDs are `/page/0`, `/page/1`, etc.
 Every response is HTTP 200 `text/html`, padded with spaces to exactly `body-bytes`.
@@ -610,7 +652,15 @@ medians. Each trial constructs fresh engine and crawl state. Duplicate engines o
 levels are deduplicated; ordering is repetition-major, then sequential, threaded
 in increasing concurrency, and async in increasing concurrency. Sequential runs
 once per repetition at concurrency 1. For threaded, concurrency counts workers;
-for async, it caps simultaneous transfers. Warmup sweeps use every configuration
+for async, it caps simultaneous transfers. `--engine` aliases `--engines`, and
+`all` selects every engine. `--workers LIST` overrides only the threaded sweep;
+without it, threaded mode uses the shared `--concurrency` list as before. Explicit
+workers require the threaded engine to be selected. Library callers use
+`BenchmarkConfig::workers`; an empty vector means the shared-list fallback.
+Benchmarks reject more than 256 workers, 1,024 async transfers, or 10,000 runs or
+warmup sweeps. These guards prevent obvious accidental resource exhaustion and do
+not change crawler APIs. Generated files can be placed in the ignored `results/`
+directory (create it before export). Warmup sweeps use every configuration
 and are validated but never included in samples or medians. Connections are not
 kept across independent trials.
 
@@ -636,24 +686,34 @@ CSV uses stable columns, a classic numeric locale, decimal milliseconds with six
 fractional digits, raw byte counts, and quoted/escaped string metadata. It records
 version, build, seed, workload parameters, limits, expected count, warmups, engine,
 configured concurrency, run, counters, elapsed, the three rates, latency sample
-count/P50/P95/P99, and explicitly labeled server observations. Each measured trial
+count/P50/P95/P99, and explicitly labeled server observations. New trailing columns
+are `scenario`, `latency_mean_ms`, `latency_min_ms`, `latency_max_ms`, `measured_runs`,
+and `started_at_unix_ms`. The timestamp is UTC Unix milliseconds captured outside
+the crawl timer; all duration measurements still use `steady_clock`. Each measured trial
 has one row. The console also shows median elapsed and median attempts/sec across
 runs per configuration (arithmetic midpoint for even counts); unavailable rates
 are excluded from rate medians. Percentiles remain per-request within each trial,
-not percentiles of per-run percentiles.
+not percentiles of per-run percentiles. Console aggregates also report population
+standard deviation of elapsed milliseconds across measured trials (divisor N,
+Welford accumulation; one trial has deviation zero).
 
 The test suite checks graph connectivity and exact payload size, arithmetic,
 percentiles, median calculations, CSV quoting/locale/empty values, three-engine
 samples, 12-row repetition sweeps, warmup exclusion, zero work, depth subsets,
 invalid arguments/paths, existing-file preservation, proxy bypass, and deliberate
-missing-link rejection. CI makes no throughput or speedup assertions.
+missing-link rejection, all five scenarios with tiny overrides, mean/extrema,
+variance, unequal sweeps, scenario mismatch, and resource limits. CI makes no
+throughput or speedup assertions.
 
 Step 8 verification on AppleClang 16 passed all 45 tests in normal and ASan/UBSan
-builds. A Release smoke run used 50 pages, fanout 4, delay 20 ms, and 1 KiB bodies,
-with sequential plus threaded/async at 1/2/4, two measured repetitions and one
-excluded warmup sweep. All 14 samples validated 50 responses, 51,200 decoded
-bytes, and zero failures. This verifies the harness; timings are not permanent
-performance claims.
+builds. TSan passed the threaded crawler, threaded CLI, and benchmark integration
+tests without reports. The named-scenario Release smoke run used `latency-bound`
+with 20 pages, fanout 4, 50 ms delay, and 1 KiB bodies. It ran sequential once per
+repetition, threaded at 1/2/4/8, and async at 1/2/4/8/16, with two measured runs and
+one excluded warmup sweep. All 20 CSV rows validated 20 responses, 20,480 decoded
+bytes, zero failures, numeric fields, and distinct run/configuration identities.
+The generated CSV stays under ignored `results/`. This verifies the harness;
+it does not establish a general performance ranking.
 
 Interpret measurements with the environment in mind: client and Python server
 compete for resources on one machine; Python thread creation, the GIL, accept
