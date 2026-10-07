@@ -9,6 +9,8 @@ namespace fluxcrawl {
 struct LatencyStats {
     std::size_t samples = 0;
     std::optional<std::chrono::nanoseconds> p50, p95, p99;
+    std::optional<double> mean_ms{};
+    std::optional<std::chrono::nanoseconds> minimum{}, maximum{};
 };
 
 // Nearest rank: sorted[ceil(percentile * N / 100) - 1]. Empty input is unavailable.

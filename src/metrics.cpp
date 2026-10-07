@@ -18,6 +18,11 @@ LatencyStats latency_stats(std::span<const std::chrono::nanoseconds> observation
             + ((sorted.size() % 100) * percentile + 99) / 100 - 1;
         return sorted[index];
     };
+    long double total_ns = 0;
+    for (const auto value : sorted) { total_ns += static_cast<long double>(value.count()); }
+    result.mean_ms = static_cast<double>(total_ns / static_cast<long double>(sorted.size()) / 1000000.0L);
+    result.minimum = sorted.front();
+    result.maximum = sorted.back();
     result.p50 = rank(50);
     result.p95 = rank(95);
     result.p99 = rank(99);
