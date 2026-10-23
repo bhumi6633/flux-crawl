@@ -21,7 +21,7 @@ class GraphTests(unittest.TestCase):
             self.assertEqual(seen, set(range(50)))
 
     def test_scenarios(self):
-        self.assertEqual(len(SCENARIOS), 5)
+        self.assertEqual(len(SCENARIOS), 7)
         for name, preset in SCENARIOS.items():
             graph = scenario_workload(name)
             self.assertEqual(graph.scenario, name)
@@ -40,6 +40,16 @@ class GraphTests(unittest.TestCase):
         self.assertEqual((custom.pages, custom.delay_ms, custom.body_bytes), (7, 0, 1024))
         with self.assertRaises(ValueError):
             scenario_workload("unknown")
+
+    def test_processing_and_mixed(self):
+        graph = scenario_workload("link-heavy")
+        for page in (0, 1, 99):
+            body = graph.body(page)
+            self.assertGreaterEqual(body.count(b"<a "), 1000)
+            self.assertGreaterEqual(body.count(b'href="/page/0"'), 10)
+        mixed = scenario_workload("mixed-latency")
+        self.assertEqual([mixed.page_delay_ms(i) for i in range(8)], [5, 20, 50, 100] * 2)
+        self.assertEqual(sum(mixed.page_delay_ms(i) for i in range(100)), 4375)
 
     def test_invalid(self):
         for args in ((0, 4, 0, 1024), (10, 0, 0, 1024), (10, 4, -1, 1024), (10, 4, 0, 1)):

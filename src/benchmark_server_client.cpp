@@ -34,15 +34,21 @@ BenchmarkWorkload BenchmarkServerClient::workload() const
     std::string protocol;
     BenchmarkWorkload workload;
     if (!(input >> protocol >> workload.pages >> workload.fanout >> workload.delay_ms >> workload.body_bytes)
-        || (protocol != "fluxcrawl-benchmark-v1" && protocol != "fluxcrawl-benchmark-v2") || workload.pages == 0 || workload.pages > 100000
+        || (protocol != "fluxcrawl-benchmark-v1" && protocol != "fluxcrawl-benchmark-v2" && protocol != "fluxcrawl-benchmark-v3") || workload.pages == 0 || workload.pages > 100000
         || workload.fanout == 0 || workload.fanout > 1000 || workload.delay_ms > 10000
         || workload.body_bytes == 0 || workload.body_bytes > 1048576) {
         throw std::runtime_error("Invalid benchmark server workload metadata");
     }
-    if (protocol == "fluxcrawl-benchmark-v2") {
+    if (protocol != "fluxcrawl-benchmark-v1") {
         if (!(input >> workload.scenario) || workload.scenario.size() > 64
             || workload.scenario.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789-") != std::string::npos) {
             throw std::runtime_error("Invalid benchmark scenario metadata");
+        }
+    }
+    if (protocol == "fluxcrawl-benchmark-v3") {
+        if (!(input >> workload.shared_anchors >> workload.delay_pattern) || workload.shared_anchors > 10000
+            || (workload.delay_pattern != "uniform" && workload.delay_pattern != "5-20-50-100")) {
+            throw std::runtime_error("Invalid benchmark link density or delay pattern");
         }
     }
     input >> std::ws;

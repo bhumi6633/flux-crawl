@@ -25,6 +25,8 @@ struct BenchmarkConfig {
 struct BenchmarkWorkload {
     std::size_t pages = 0, fanout = 0, delay_ms = 0, body_bytes = 0;
     std::string scenario = "custom";
+    std::size_t shared_anchors = 0;
+    std::string delay_pattern = "uniform";
 };
 struct BenchmarkSample {
     EngineType engine = EngineType::Sequential;
