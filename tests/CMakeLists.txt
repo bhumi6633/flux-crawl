@@ -86,3 +86,10 @@ add_test(NAME benchmark.arithmetic_csv COMMAND fluxcrawl_benchmark_test)
 add_test(NAME benchmark.integration COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/benchmark_integration.py" "$<TARGET_FILE:fluxcrawl_benchmark_test>" "$<TARGET_FILE:fluxcrawl>")
 set_tests_properties(benchmark.integration PROPERTIES TIMEOUT 90)
+
+add_executable(fluxcrawl_profiling_test profiling_test.cpp)
+target_link_libraries(fluxcrawl_profiling_test PRIVATE FluxCrawl::core)
+fluxcrawl_enable_warnings(fluxcrawl_profiling_test)
+add_test(NAME core.profiling COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/http_server.py" "$<TARGET_FILE:fluxcrawl_profiling_test>")
+set_tests_properties(core.profiling PROPERTIES TIMEOUT 90)

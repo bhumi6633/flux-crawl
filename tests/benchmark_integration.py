@@ -28,6 +28,8 @@ def main():
                 assert result.returncode == 0, result.stderr
                 rows = list(csv.DictReader(output.open()))
                 assert len(rows) == 14
+                assert all(row["profile_enabled"] == "0" and row["extraction_ms"] == ""
+                           and row["worker_profiles"] == "" and None not in row for row in rows)
                 assert all(row["measured_runs"] == "2" and int(row["started_at_unix_ms"]) > 0 for row in rows)
                 assert server.resets - before == 21  # 7 configurations x (one warmup + two measured).
                 assert all(int(row["pages_attempted"]) == 10 and int(row["bytes_downloaded"]) == 10240 for row in rows)
@@ -51,11 +53,24 @@ def main():
                     server.workload = scenario_workload(name, pages=10, delay_ms=0)
                     destination = Path(temporary) / (name + ".csv")
                     result = subprocess.run([sys.argv[2], "benchmark", "--seed", seed, "--scenario", name,
-                                             "--engine", "all", "--concurrency", "2", "--runs", "1",
+                                             "--engine", "all", "--concurrency", "2", "--runs", "1", "--profile",
                                              "--output", str(destination)], capture_output=True, text=True, env=environment, timeout=20)
                     assert result.returncode == 0, result.stderr
                     with destination.open() as source:
                         scenario_rows = list(csv.DictReader(source))
+                    assert "Profile (overlapping wall durations" in result.stdout
+                    for row in scenario_rows:
+                        assert None not in row and row["profile_enabled"] == "1"
+                        assert int(row["extractions"]) == 10 and int(row["links_accepted"]) == 9
+                        assert float(row["extraction_ms"]) >= 0
+                        assert row["delay_pattern"] == server.workload.delay_pattern
+                        assert int(row["shared_anchors"]) == server.workload.shared_anchors
+                        if row["engine"] == "threaded":
+                            assert int(row["worker_requests"]) == 10 and row["multi_wait_ms"] == ""
+                        elif row["engine"] == "async":
+                            assert int(row["completions"]) == 10 and row["lock_wait_ms"] == ""
+                        else:
+                            assert row["lock_wait_ms"] == row["multi_wait_ms"] == ""
                     assert len(scenario_rows) == 3 and all(row["scenario"] == name for row in scenario_rows)
                     assert all(int(row["bytes_downloaded"]) == 10 * server.workload.body_bytes for row in scenario_rows)
                 server.workload = Workload(10, 4, 2, 1024)
