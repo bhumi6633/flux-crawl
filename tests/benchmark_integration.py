@@ -92,6 +92,7 @@ def main():
                 invalid_output = Path(temporary) / "invalid.csv"
                 failed = subprocess.run(cli + ["--output", str(invalid_output)], capture_output=True, text=True, env=environment, timeout=10)
                 assert failed.returncode == 1 and "Invalid benchmark sample" in failed.stderr, failed.stderr
+                assert "expected=10 attempted=9" in failed.stderr and "engine=sequential" in failed.stderr
                 assert not invalid_output.exists() and not failed.stdout
             print("Benchmark library, sweeps, warmups, CSV, CLI validation, and incomplete-workload checks passed")
         finally:

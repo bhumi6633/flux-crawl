@@ -38,7 +38,20 @@ CrawlResult crawl(EngineType engine, std::size_t concurrency, const BenchmarkCon
 void validate(const CrawlResult& result, const BenchmarkConfig& config, const BenchmarkWorkload& workload,
               const std::vector<std::size_t>& depths, std::size_t expected)
 {
-    const auto fail = [] { throw std::runtime_error("Invalid benchmark sample: incomplete or different logical workload"); };
+    const auto fail = [&] {
+        std::string reason = "Invalid benchmark sample: incomplete or different logical workload; expected="
+            + std::to_string(expected) + " attempted=" + std::to_string(result.pages_attempted)
+            + " responses=" + std::to_string(result.responses_received) + " failures=" + std::to_string(result.fetch_failures)
+            + " bytes=" + std::to_string(result.bytes_downloaded) + " discovered=" + std::to_string(result.urls_discovered)
+            + " pending=" + std::to_string(result.urls_pending);
+        for (const auto& record : result.records) {
+            if (const auto* error = std::get_if<HttpError>(&record.outcome)) {
+                reason += "; first HTTP error: " + error->message;
+                break;
+            }
+        }
+        throw std::runtime_error(reason);
+    };
     if (result.pages_attempted != expected || result.responses_received != expected || result.fetch_failures != 0
         || result.records.size() != expected || result.bytes_downloaded != expected * workload.body_bytes
         || result.urls_pending != (expected == 0 ? 1U : 0U)
@@ -164,7 +177,12 @@ BenchmarkReport BenchmarkRunner::run(const BenchmarkConfig& config) const
         server.reset();
         auto result = crawl(engine, concurrency, config);
         const auto stats = server.stats();
-        validate(result, config, report.workload, depths, report.expected_pages);
+        try {
+            validate(result, config, report.workload, depths, report.expected_pages);
+        } catch (const std::runtime_error& error) {
+            throw std::runtime_error(std::string{error.what()} + "; engine=" + std::string{engine_name(engine)}
+                + " concurrency=" + std::to_string(concurrency) + " run=" + std::to_string(run));
+        }
         if (stats.active != 0 || stats.requests != report.expected_pages || stats.unique != report.expected_pages
             || stats.peak > concurrency || (report.expected_pages != 0 && stats.peak == 0)) {
             throw std::runtime_error("Invalid benchmark sample: server request counts or concurrency mismatch");
