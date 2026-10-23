@@ -1,6 +1,7 @@
 import sys
 from pathlib import Path
 import unittest
+import subprocess
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from benchmark_server import Workload, SCENARIOS, scenario_workload
 
@@ -50,6 +51,13 @@ class GraphTests(unittest.TestCase):
         mixed = scenario_workload("mixed-latency")
         self.assertEqual([mixed.page_delay_ms(i) for i in range(8)], [5, 20, 50, 100] * 2)
         self.assertEqual(sum(mixed.page_delay_ms(i) for i in range(100)), 4375)
+
+    def test_cli_rejects_too_small_scenario_body(self):
+        result = subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / "tools" / "benchmark_server.py"),
+                                 "--scenario", "link-heavy", "--body-bytes", "1"],
+                                capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("body-bytes too small", result.stderr)
 
     def test_invalid(self):
         for args in ((0, 4, 0, 1024), (10, 0, 0, 1024), (10, 4, -1, 1024), (10, 4, 0, 1)):

@@ -155,7 +155,7 @@ def main():
     if not 0 <= args.port <= 65535:
         parser.error("port must be 0..65535")
     try:
-        overrides = {field: getattr(args, field) for field in ("pages", "fanout", "delay_ms", "body_bytes", "shared_anchors", "delay_pattern")}
+        overrides = {field: getattr(args, field) for field in ("pages", "fanout", "delay_ms", "body_bytes")}
         workload = scenario_workload(args.scenario, **overrides) if args.scenario else Workload(
             **{key: value for key, value in overrides.items() if value is not None})
     except ValueError as error:
