@@ -3,6 +3,7 @@
 #include <fluxcrawl/crawl_frontier.hpp>
 #include <fluxcrawl/http_response.hpp>
 
+#include <fluxcrawl/profiling.hpp>
 #include <vector>
 #include <chrono>
 
@@ -12,6 +13,7 @@ struct CrawlOptions {
     std::size_t max_depth = 2;
     std::size_t max_pages = 100;
     bool same_host_only = false;
+    bool profile = false;
 };
 
 struct CrawlResponseMetadata {
@@ -39,6 +41,7 @@ struct CrawlResult {
     std::chrono::nanoseconds elapsed{};
     // Sum of decoded body bytes in HttpResponse outcomes; excludes partial failed bodies.
     std::size_t bytes_downloaded = 0;
+    std::optional<ProfileSummary> profile{};
     std::vector<CrawlRecord> records; // Sequential attempt order or concurrent publication order; no bodies.
 };
 

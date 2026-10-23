@@ -1,5 +1,7 @@
 #include <fluxcrawl/async_crawler.hpp>
 #include "crawl_processing.hpp"
+#include "profile_timer.hpp"
+#include <algorithm>
 #include "curl_transfer.hpp"
 
 #include <memory>
@@ -92,21 +94,29 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
     const auto started = std::chrono::steady_clock::now();
     CrawlState state{seed, options.max_depth};
     CrawlResult result;
-    auto ready = state.next(); // Lookahead stays pending until committed to an attempt.
+    if (options.profile) { result.profile.emplace(); result.profile->async.emplace(); }
+    auto* common = result.profile ? &result.profile->common : nullptr;
+    auto* profile = result.profile ? &*result.profile->async : nullptr;
+    const auto next = [&] {
+        detail::ProfileTimer timer{common ? &common->frontier : nullptr};
+        return state.next();
+    };
+    auto ready = next(); // Lookahead stays pending until committed to an attempt.
     std::size_t active_depth = 0;
     MultiTransfers transfers;
 
     const auto publish = [&](HttpResult response, CrawlItem item, std::chrono::nanoseconds latency) {
         detail::publish_page(state, result,
-            detail::process_response(std::move(response), std::move(item), options, latency), seed, options);
-        if (!ready) { ready = state.next(); }
+            detail::process_response(std::move(response), std::move(item), options, latency, common), seed, options, common);
+        if (!ready) { ready = next(); }
     };
     const auto fill = [&] {
+        detail::ProfileTimer timer{profile ? &profile->refill_time : nullptr};
         bool added = false;
         while (ready && transfers.active.size() < concurrency_ && result.pages_attempted < options.max_pages
                && (transfers.active.empty() || ready->depth == active_depth)) {
             auto item = std::move(*ready);
-            ready = state.next();
+            ready = next();
             active_depth = item.depth;
             ++result.pages_attempted;
             const auto setup_started = std::chrono::steady_clock::now();
@@ -117,6 +127,10 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
             } else {
                 transfers.add(std::move(transfer));
                 added = true;
+                if (profile) {
+                    ++profile->refills;
+                    profile->max_active = std::max(profile->max_active, transfers.active.size());
+                }
             }
         }
         return added;
@@ -124,22 +138,29 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
 
     (void)fill();
     while (!transfers.active.empty()) {
+        if (profile) { ++profile->iterations; }
         int running = 0;
         check_multi(curl_multi_perform(transfers.handle, &running));
-        int remaining = 0;
-        while (auto* message = curl_multi_info_read(transfers.handle, &remaining)) {
-            if (message->msg != CURLMSG_DONE) { continue; }
-            // The message storage becomes invalid after removal. Copy its result first.
-            const auto completed = std::chrono::steady_clock::now();
-            const auto code = message->data.result;
-            auto transfer = transfers.remove(message->easy_handle);
-            publish(transfer->request.finish(code), std::move(transfer->item), completed - transfer->started);
+        {
+            detail::ProfileTimer timer{profile ? &profile->completions_time : nullptr};
+            int remaining = 0;
+            while (auto* message = curl_multi_info_read(transfers.handle, &remaining)) {
+                if (message->msg != CURLMSG_DONE) { continue; }
+                // The message storage becomes invalid after removal. Copy its result first.
+                if (profile) { ++profile->completions; }
+                const auto completed = std::chrono::steady_clock::now();
+                const auto code = message->data.result;
+                auto transfer = transfers.remove(message->easy_handle);
+                publish(transfer->request.finish(code), std::move(transfer->item), completed - transfer->started);
+            }
         }
         // Refill after draining completions, before waiting on any remaining siblings.
         // Preserve BFS depth barriers, but never wait for a whole same-depth batch.
         if (fill()) { continue; } // New handles need perform before the next poll.
         if (!transfers.active.empty()) {
             // poll honors shorter internal curl timers and sleeps even with no descriptors.
+            detail::ProfileTimer timer{profile ? &profile->multi_wait : nullptr};
+            if (profile) { ++profile->waits; }
             check_multi(curl_multi_poll(transfers.handle, nullptr, 0, 1000, nullptr));
         }
     }
