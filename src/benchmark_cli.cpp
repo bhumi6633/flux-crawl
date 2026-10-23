@@ -78,6 +78,7 @@ int benchmark_main(int argc, char* argv[])
         bool has_seed = false, help = false;
         for (int index = 2; index < argc; ++index) {
             const std::string_view option{argv[index]};
+            if (option == "--profile") { config.crawl.profile = true; continue; }
             if (option == "--help") { help = true; continue; }
             if (option != "--seed" && option != "--engines" && option != "--concurrency" && option != "--depth"
                 && option != "--max-pages" && option != "--runs" && option != "--warmups" && option != "--output"
@@ -139,6 +140,7 @@ int benchmark_main(int argc, char* argv[])
                          "  --runs N           Measured repetitions (default: 3; positive)\n"
                          "  --warmups N        Excluded warmup sweeps (default: 0)\n"
                          "  --output PATH      CSV; exclusively creates a new file, never overwrites\n"
+                         "  --profile          Collect optional operation timings and engine counters\n"
                          "  --help             Show benchmark help\n"
                          "Threaded concurrency counts workers; async counts active transfers.\n"
                          "Metrics: active request mean/min/max/P50/P95/P99, crawl elapsed, attempts/s, responses/s, bytes/s.\n"

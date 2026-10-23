@@ -32,10 +32,10 @@ int main(int argc, char* argv[])
     std::ostringstream output;
     output.imbue(std::locale{std::locale::classic(), new CommaPunctuation});
     fluxcrawl::write_benchmark_csv(output, report);
-    const std::string expected_header = "version,build_type,seed,workload_pages,fanout,delay_ms,body_bytes,max_depth,max_pages,expected_pages,warmups,engine,configured_concurrency,run,pages_attempted,responses_received,fetch_failures,bytes_downloaded,elapsed_ms,attempts_per_second,responses_per_second,bytes_per_second,latency_samples,p50_ms,p95_ms,p99_ms,server_requests,server_peak_active,scenario,latency_mean_ms,latency_min_ms,latency_max_ms,measured_runs,started_at_unix_ms\n";
+    const std::string expected_header = "version,build_type,seed,workload_pages,fanout,delay_ms,body_bytes,max_depth,max_pages,expected_pages,warmups,engine,configured_concurrency,run,pages_attempted,responses_received,fetch_failures,bytes_downloaded,elapsed_ms,attempts_per_second,responses_per_second,bytes_per_second,latency_samples,p50_ms,p95_ms,p99_ms,server_requests,server_peak_active,scenario,latency_mean_ms,latency_min_ms,latency_max_ms,measured_runs,started_at_unix_ms,shared_anchors,delay_pattern,profile_enabled,extraction_ms,discovery_ms,frontier_ms,extractions,links_considered,links_accepted,lock_wait_ms,worker_idle_ms,worker_activity_ms,lock_acquisitions,cv_waits,worker_wakeups,worker_requests,max_active_workers,multi_wait_ms,completion_processing_ms,refill_ms,event_loop_iterations,multi_waits,completions,refills,max_active_transfers,worker_profiles\n";
     const std::string prefix = "\"v\"\"1\",\"Test\",\"http://127.0.0.1/page/0\",10,2,5,100,20,100,10,0,sequential,1,1,";
-    check(output.str() == expected_header + prefix + "100,80,20,1000,2000.000000,50.000000,40.000000,500.000000,100,10.000000,20.000000,30.000000,100,1,\"custom\",15.500000,1.000000,40.000000,0,0\n"
-          + prefix + "0,0,0,0,0.000000,,,,0,,,,0,0,\"custom\",,,,0,0\n", "CSV header, columns, quoting, locale, empty fields, rows, newlines");
+    check(output.str() == expected_header + prefix + "100,80,20,1000,2000.000000,50.000000,40.000000,500.000000,100,10.000000,20.000000,30.000000,100,1,\"custom\",15.500000,1.000000,40.000000,0,0,0,\"uniform\",0" + std::string(23, ',') + "\n"
+          + prefix + "0,0,0,0,0.000000,,,,0,,,,0,0,\"custom\",,,,0,0,0,\"uniform\",0" + std::string(23, ',') + "\n", "CSV header, columns, quoting, locale, empty fields, rows, newlines");
     sample.elapsed = 4s; sample.metrics.attempts_per_second = 25;
     report.samples[1] = sample;
     auto aggregate = fluxcrawl::aggregate_samples(report.samples);

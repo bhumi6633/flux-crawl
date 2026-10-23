@@ -35,6 +35,7 @@ struct BenchmarkSample {
     std::chrono::nanoseconds elapsed{};
     CrawlMetrics metrics;
     std::size_t server_requests = 0, server_peak_active = 0;
+    std::optional<ProfileSummary> profile{};
 };
 struct BenchmarkAggregate {
     EngineType engine;
