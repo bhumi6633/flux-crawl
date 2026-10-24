@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <unordered_map>
 #include <utility>
+#include <thread>
 
 namespace fluxcrawl {
 namespace {
@@ -20,9 +21,9 @@ void check_multi(CURLMcode code)
 }
 
 struct ActiveTransfer {
-    ActiveTransfer(CrawlItem pending, const HttpClientOptions& options)
-        : item{std::move(pending)}, request{item.url, options} {}
-    CrawlItem item;
+    ActiveTransfer(HostScheduler::Lease pending, const HttpClientOptions& options)
+        : claim{std::move(pending)}, request{claim.item.url, options} {}
+    HostScheduler::Lease claim;
     detail::CurlTransfer request;
     std::chrono::steady_clock::time_point started;
 };
@@ -93,36 +94,33 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
 {
     const auto started = std::chrono::steady_clock::now();
     CrawlState state{seed, options.max_depth};
+    HostScheduler scheduler{concurrency_, options.scheduling};
+    state.schedule_pending(scheduler);
     CrawlResult result;
     if (options.profile) { result.profile.emplace(); result.profile->async.emplace(); }
     auto* common = result.profile ? &result.profile->common : nullptr;
     auto* profile = result.profile ? &*result.profile->async : nullptr;
-    const auto next = [&] {
-        detail::ProfileTimer timer{common ? &common->frontier : nullptr};
-        return state.next();
-    };
-    auto ready = next(); // Lookahead stays pending until committed to an attempt.
-    std::size_t active_depth = 0;
     MultiTransfers transfers;
 
     const auto publish = [&](HttpResult response, CrawlItem item, std::chrono::nanoseconds latency) {
         detail::publish_page(state, result,
             detail::process_response(std::move(response), std::move(item), options, latency, common), seed, options, common);
-        if (!ready) { ready = next(); }
+        state.schedule_pending(scheduler);
     };
     const auto fill = [&] {
         detail::ProfileTimer timer{profile ? &profile->refill_time : nullptr};
         bool added = false;
-        while (ready && transfers.active.size() < concurrency_ && result.pages_attempted < options.max_pages
-               && (transfers.active.empty() || ready->depth == active_depth)) {
-            auto item = std::move(*ready);
-            ready = next();
-            active_depth = item.depth;
+        while (transfers.active.size() < concurrency_ && result.pages_attempted < options.max_pages) {
+            auto item = [&] {
+                detail::ProfileTimer frontier{common ? &common->frontier : nullptr};
+                return scheduler.acquire(HostScheduler::Clock::now());
+            }();
+            if (!item) { break; }
             ++result.pages_attempted;
             const auto setup_started = std::chrono::steady_clock::now();
-            auto transfer = std::make_unique<ActiveTransfer>(std::move(item), http_options_);
+            auto transfer = std::make_unique<ActiveTransfer>(std::move(*item), http_options_);
             if (transfer->request.setup != CURLE_OK) {
-                publish(transfer->request.finish(transfer->request.setup), std::move(transfer->item),
+                publish(transfer->request.finish(transfer->request.setup), std::move(transfer->claim.item),
                         std::chrono::steady_clock::now() - setup_started);
             } else {
                 transfers.add(std::move(transfer));
@@ -137,7 +135,14 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
     };
 
     (void)fill();
-    while (!transfers.active.empty()) {
+    while (!transfers.active.empty() || (scheduler.pending() != 0 && result.pages_attempted < options.max_pages)) {
+        if (transfers.active.empty()) {
+            if (const auto deadline = scheduler.next_deadline(HostScheduler::Clock::now())) {
+                std::this_thread::sleep_until(*deadline);
+            }
+            (void)fill();
+            if (transfers.active.empty()) { continue; }
+        }
         if (profile) { ++profile->iterations; }
         int running = 0;
         check_multi(curl_multi_perform(transfers.handle, &running));
@@ -151,7 +156,7 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
                 const auto completed = std::chrono::steady_clock::now();
                 const auto code = message->data.result;
                 auto transfer = transfers.remove(message->easy_handle);
-                publish(transfer->request.finish(code), std::move(transfer->item), completed - transfer->started);
+                publish(transfer->request.finish(code), std::move(transfer->claim.item), completed - transfer->started);
             }
         }
         // Refill after draining completions, before waiting on any remaining siblings.
@@ -161,12 +166,20 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
             // poll honors shorter internal curl timers and sleeps even with no descriptors.
             detail::ProfileTimer timer{profile ? &profile->multi_wait : nullptr};
             if (profile) { ++profile->waits; }
-            check_multi(curl_multi_poll(transfers.handle, nullptr, 0, 1000, nullptr));
+            int timeout_ms = 1000;
+            if (result.pages_attempted < options.max_pages) {
+                const auto now = HostScheduler::Clock::now();
+                if (const auto deadline = scheduler.next_deadline(now)) {
+                    const auto delay = std::chrono::ceil<std::chrono::milliseconds>(*deadline - now).count();
+                    timeout_ms = static_cast<int>(std::clamp<decltype(delay)>(delay, 1, 1000));
+                }
+            }
+            check_multi(curl_multi_poll(transfers.handle, nullptr, 0, timeout_ms, nullptr));
         }
     }
     transfers.close();
     result.urls_discovered = state.seen_count();
-    result.urls_pending = state.frontier_size() + (ready ? 1U : 0U);
+    result.urls_pending = scheduler.pending();
     result.elapsed = std::chrono::steady_clock::now() - started;
     return result;
 }

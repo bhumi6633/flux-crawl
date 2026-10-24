@@ -110,6 +110,9 @@ std::vector<BenchmarkAggregate> aggregate_samples(std::span<const BenchmarkSampl
 
 BenchmarkReport BenchmarkRunner::run(const BenchmarkConfig& config) const
 {
+    if (config.crawl.scheduling.max_per_host || config.crawl.scheduling.rate) {
+        throw std::invalid_argument("The single-origin benchmark requires disabled host limits; use the multi-host scenario for scheduling experiments");
+    }
     if (config.runs == 0 || config.engines.empty() || config.concurrency.empty()
         || std::find(config.concurrency.begin(), config.concurrency.end(), 0) != config.concurrency.end()) {
         throw std::invalid_argument("Benchmark requires positive runs/concurrency and nonempty engine/concurrency lists");

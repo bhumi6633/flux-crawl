@@ -5,6 +5,8 @@
 #include "profile_timer.hpp"
 
 #include <utility>
+#include <thread>
+#include <stdexcept>
 
 namespace fluxcrawl {
 
@@ -14,22 +16,29 @@ CrawlResult SequentialCrawler::crawl(const Url& seed, const CrawlOptions& option
 {
     const auto started = std::chrono::steady_clock::now();
     CrawlState state{seed, options.max_depth};
+    HostScheduler scheduler{1, options.scheduling};
+    state.schedule_pending(scheduler);
     CrawlResult result;
     if (options.profile) { result.profile.emplace(); }
     auto* profile = result.profile ? &result.profile->common : nullptr;
-    while (!state.empty() && result.pages_attempted < options.max_pages) {
+    while (scheduler.pending() != 0 && result.pages_attempted < options.max_pages) {
         auto item = [&] {
             detail::ProfileTimer timer{profile ? &profile->frontier : nullptr};
-            return state.next();
+            return scheduler.acquire(HostScheduler::Clock::now());
         }();
         if (!item) {
-            break;
+            if (const auto deadline = scheduler.next_deadline(HostScheduler::Clock::now())) {
+                std::this_thread::sleep_until(*deadline);
+                continue;
+            }
+            throw std::logic_error("Pending sequential work has no scheduling deadline");
         }
         ++result.pages_attempted;
-        detail::publish_page(state, result, detail::process_page(client_, std::move(*item), options, profile), seed, options, profile);
+        detail::publish_page(state, result, detail::process_page(client_, std::move(item->item), options, profile), seed, options, profile);
+        state.schedule_pending(scheduler);
     }
     result.urls_discovered = state.seen_count();
-    result.urls_pending = state.frontier_size();
+    result.urls_pending = scheduler.pending();
     result.elapsed = std::chrono::steady_clock::now() - started;
     return result;
 }

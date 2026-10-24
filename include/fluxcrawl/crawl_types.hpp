@@ -1,6 +1,7 @@
 #pragma once
 
 #include <fluxcrawl/crawl_frontier.hpp>
+#include <fluxcrawl/host_scheduler.hpp>
 #include <fluxcrawl/http_response.hpp>
 
 #include <fluxcrawl/profiling.hpp>
@@ -14,6 +15,7 @@ struct CrawlOptions {
     std::size_t max_pages = 100;
     bool same_host_only = false;
     bool profile = false;
+    SchedulingOptions scheduling{};
 };
 
 struct CrawlResponseMetadata {

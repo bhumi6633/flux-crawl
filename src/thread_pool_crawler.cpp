@@ -17,37 +17,34 @@ namespace {
 
 class Coordinator {
 public:
-    Coordinator(const Url& seed, const CrawlOptions& options)
-        : seed_{seed}, options_{options}, state_{seed, options.max_depth}, ready_{state_.next()} {}
+    Coordinator(const Url& seed, const CrawlOptions& options, std::size_t workers)
+        : seed_{seed}, options_{options}, state_{seed, options.max_depth}, scheduler_{workers, options.scheduling}
+    { state_.schedule_pending(scheduler_); }
 
-    std::optional<CrawlItem> acquire(WorkerProfile* profile)
+    std::optional<HostScheduler::Lease> acquire(WorkerProfile* profile)
     {
         auto lock = acquire_lock(profile);
-        const auto runnable = [&] {
-            return fatal_ || result_.pages_attempted == options_.max_pages
-                || active_ == 0 || (ready_ && ready_->depth == active_depth_);
-        };
-        while (!runnable()) {
+        for (;;) {
+            if (fatal_ || result_.pages_attempted == options_.max_pages) { return std::nullopt; }
+            {
+                detail::ProfileTimer timer{profile ? &profile->common.frontier : nullptr};
+                if (auto claim = scheduler_.acquire(HostScheduler::Clock::now())) {
+                    ++result_.pages_attempted;
+                    if (profile) { max_active_ = std::max(max_active_, scheduler_.active()); }
+                    return claim;
+                }
+            }
+            if (scheduler_.pending() == 0 && scheduler_.active() == 0) { return std::nullopt; }
+            const auto deadline = scheduler_.next_deadline(HostScheduler::Clock::now());
             detail::ProfileTimer timer{profile ? &profile->idle : nullptr};
             if (profile) { ++profile->waits; }
-            changed_.wait(lock);
+            if (deadline) { changed_.wait_until(lock, *deadline); }
+            else { changed_.wait(lock); }
             if (profile) { ++profile->wakeups; }
         }
-        detail::ProfileTimer timer{profile ? &profile->common.frontier : nullptr};
-        if (fatal_ || result_.pages_attempted == options_.max_pages || !ready_) {
-            return std::nullopt;
-        }
-        auto item = std::move(ready_);
-        ready_ = state_.next();
-        active_depth_ = item->depth;
-        // Budget reservation and active work transition are atomic with the pop.
-        ++result_.pages_attempted;
-        ++active_;
-        if (profile) { max_active_ = std::max(max_active_, active_); }
-        return item;
     }
 
-    void complete(detail::ProcessedPage page, WorkerProfile* profile)
+    void complete(detail::ProcessedPage page, HostScheduler::Lease& claim, WorkerProfile* profile)
     {
         {
             auto lock = acquire_lock(profile);
@@ -56,20 +53,20 @@ public:
             if (!fatal_) {
                 // The seen check, insertion, enqueue, and result update share this lock.
                 detail::publish_page(state_, result_, std::move(page), seed_, options_, profile ? &profile->common : nullptr);
-                if (!ready_) { ready_ = state_.next(); }
+                state_.schedule_pending(scheduler_);
             }
-            --active_;
+            claim.release();
         }
         // Multiple new items or a depth transition can make every waiter runnable.
         changed_.notify_all();
     }
 
-    void fail(std::exception_ptr error, bool claimed)
+    void fail(std::exception_ptr error, HostScheduler::Lease* claim)
     {
         {
             std::lock_guard lock{mutex_};
             if (!fatal_) { fatal_ = std::move(error); }
-            if (claimed) { --active_; }
+            if (claim) { claim->release(); }
         }
         changed_.notify_all();
     }
@@ -81,7 +78,7 @@ public:
         // Called only after all workers have joined.
         if (fatal_) { std::rethrow_exception(fatal_); }
         result_.urls_discovered = state_.seen_count();
-        result_.urls_pending = state_.frontier_size() + (ready_ ? 1U : 0U);
+        result_.urls_pending = scheduler_.pending();
         return std::move(result_);
     }
 
@@ -100,15 +97,12 @@ private:
     const Url& seed_;
     const CrawlOptions& options_;
     CrawlState state_;
-    // One lookahead item remains queued, not active/attempted, until acquire().
-    std::optional<CrawlItem> ready_;
+    HostScheduler scheduler_;
     CrawlResult result_;
     std::mutex mutex_;
     std::condition_variable changed_;
     std::exception_ptr fatal_;
-    // Active means claimed but not published (or failed). Empty queue alone is not done.
-    std::size_t active_ = 0;
-    std::size_t active_depth_ = 0;
+
 };
 
 } // namespace
@@ -125,7 +119,7 @@ CrawlResult ThreadPoolCrawler::crawl(const Url& seed, const CrawlOptions& option
     // Initialize libxml2 on the calling thread. HttpClient already initialized curl.
     const HtmlLinkExtractor initialized_parser;
     (void)initialized_parser;
-    Coordinator coordinator{seed, options};
+    Coordinator coordinator{seed, options, workers_};
     std::optional<ThreadProfile> profile;
     if (options.profile) { profile.emplace(); }
     if (options.max_pages == 0) {
@@ -141,26 +135,26 @@ CrawlResult ThreadPoolCrawler::crawl(const Url& seed, const CrawlOptions& option
         for (std::size_t index = 0; index < workers_; ++index) {
             workers.emplace_back([&, index] {
                 auto* worker_profile = profile ? &profile->workers[index] : nullptr;
-                bool claimed = false;
+                std::optional<HostScheduler::Lease> claim;
                 try {
                     // Immutable options are shared; each fetch owns its easy handle and buffers.
                     while (auto item = coordinator.acquire(worker_profile)) {
                         detail::ProfileTimer activity{worker_profile ? &worker_profile->activity : nullptr};
-                        claimed = true;
+                        claim.emplace(std::move(*item));
                         if (worker_profile) { ++worker_profile->requests; }
-                        auto page = detail::process_page(client_, std::move(*item), options,
+                        auto page = detail::process_page(client_, std::move(claim->item), options,
                             worker_profile ? &worker_profile->common : nullptr);
-                        coordinator.complete(std::move(page), worker_profile);
-                        claimed = false;
+                        coordinator.complete(std::move(page), *claim, worker_profile);
+                        claim.reset();
                     }
                 } catch (...) {
-                    coordinator.fail(std::current_exception(), claimed);
+                    coordinator.fail(std::current_exception(), claim ? &*claim : nullptr);
                 }
             });
         }
     } catch (...) {
         // A partially created pool must be woken and joined too.
-        coordinator.fail(std::current_exception(), false);
+        coordinator.fail(std::current_exception(), nullptr);
     }
     for (auto& worker : workers) { worker.join(); }
     auto result = coordinator.finish();
