@@ -778,3 +778,14 @@ and async event-loop behavior. Categories overlap and do not measure CPU
 utilization. New `link-heavy` and `mixed-latency` scenarios expose processing
 costs and out-of-order completions. See [profiling definitions and external-tool
 commands](docs/profiling.md) and the [measured analysis](profiling-report.md).
+
+## Evidence-based optimization
+
+The first measured optimization avoids resolving identical decoded hrefs more
+than once per document, while retaining canonical URL deduplication and discovery
+order. On the documented Apple M3 link-heavy workload, five-run median throughput
+improved about 54–68% across the tested configurations; reversed-order trials
+confirmed the benefit. Network and low-duplicate workloads showed no meaningful
+improvement. The cache adds per-document storage, and measured memory accounting
+was mixed. See the [optimization report](docs/optimization-report.md) for full
+before/after latency, variance, profiler evidence, memory tradeoffs and reproduction.
