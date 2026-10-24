@@ -99,3 +99,13 @@ target_link_libraries(fluxcrawl_host_scheduler_test PRIVATE FluxCrawl::core)
 fluxcrawl_enable_warnings(fluxcrawl_host_scheduler_test)
 add_test(NAME core.host_scheduler COMMAND fluxcrawl_host_scheduler_test)
 set_tests_properties(core.host_scheduler PROPERTIES TIMEOUT 10)
+
+add_executable(fluxcrawl_host_crawler_test host_crawler_test.cpp)
+target_link_libraries(fluxcrawl_host_crawler_test PRIVATE FluxCrawl::core)
+fluxcrawl_enable_warnings(fluxcrawl_host_crawler_test)
+add_test(NAME scheduling.integration COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/host_integration.py" "$<TARGET_FILE:fluxcrawl_host_crawler_test>")
+set_tests_properties(scheduling.integration PROPERTIES TIMEOUT 120)
+add_test(NAME scheduling.stress COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/host_integration.py" "$<TARGET_FILE:fluxcrawl_host_crawler_test>" --stress)
+set_tests_properties(scheduling.stress PROPERTIES TIMEOUT 120 LABELS stress)

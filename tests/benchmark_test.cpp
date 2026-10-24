@@ -14,6 +14,15 @@ int main(int argc, char* argv[])
 {
     int failures = 0;
     const auto check = [&](bool ok, const char* label) { if (!ok) { ++failures; std::cerr << label << '\n'; } };
+    for (bool rate : {false, true}) {
+        fluxcrawl::BenchmarkConfig limited{fluxcrawl::Url::parse("http://127.0.0.1:1/page/0").value()};
+        if (rate) { limited.crawl.scheduling.rate = fluxcrawl::RateLimit{1, 1}; }
+        else { limited.crawl.scheduling.max_per_host = 2; }
+        bool rejected = false;
+        try { (void)fluxcrawl::BenchmarkRunner{}.run(limited); }
+        catch (const std::invalid_argument&) { rejected = true; }
+        check(rejected, "legacy benchmark rejects unrecorded host limits before contacting server");
+    }
     fluxcrawl::BenchmarkReport report;
     report.version = "v\"1";
     report.build_type = "Test";
