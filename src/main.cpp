@@ -7,6 +7,9 @@
 
 #include <charconv>
 #include <exception>
+#include <cmath>
+#include <sstream>
+#include <locale>
 #include <iostream>
 #include <string_view>
 
@@ -24,6 +27,9 @@ void print_help()
                  "  --workers N     Threaded workers (default: 4; must be positive)\n"
                  "  --concurrency N Async simultaneous transfers (default: 8; positive)\n"
                  "                  One event-loop thread, continuous slot refill\n"
+                 "  --max-per-host N   Maximum active claims per origin (default: unlimited)\n"
+                 "  --rate-per-host R  Positive requests/sec per origin (default: disabled)\n"
+                 "  --burst-per-host N Token capacity (default: 1; requires --rate-per-host)\n"
                  "  --depth N       Maximum crawl depth (default: 2)\n"
                  "  --max-pages N   Maximum fetch attempts (default: 100)\n"
                  "  --same-host     Accept discoveries matching the seed host\n"
@@ -45,6 +51,8 @@ int main(int argc, char* argv[])
     bool workers_supplied = false;
     std::size_t concurrency = 8;
     bool concurrency_supplied = false;
+    std::size_t burst = 1;
+    bool burst_supplied = false;
 
     for (int index = 1; index < argc; ++index) {
         const std::string_view argument{argv[index]};
@@ -54,6 +62,21 @@ int main(int argc, char* argv[])
             show_version = true;
         } else if (argument == "--same-host") {
             options.same_host_only = true;
+        } else if (argument == "--rate-per-host") {
+            if (index + 1 >= argc) {
+                std::cerr << "fluxcrawl: --rate-per-host requires a finite positive number.\n";
+                return 1;
+            }
+            const std::string value{argv[++index]};
+            std::istringstream input{value};
+            input.imbue(std::locale::classic());
+            double rate = 0;
+            input >> std::noskipws >> rate;
+            if (!input || !input.eof() || !std::isfinite(rate) || rate <= 0) {
+                std::cerr << "fluxcrawl: --rate-per-host requires a finite positive number.\n";
+                return 1;
+            }
+            options.scheduling.rate = fluxcrawl::RateLimit{rate, burst};
         } else if (argument == "--engine") {
             if (index + 1 >= argc) {
                 std::cerr << "fluxcrawl: --engine requires sequential, threaded, or async.\n";
@@ -64,7 +87,7 @@ int main(int argc, char* argv[])
                 std::cerr << "fluxcrawl: --engine requires sequential, threaded, or async.\n";
                 return 1;
             }
-        } else if (argument == "--depth" || argument == "--max-pages" || argument == "--workers" || argument == "--concurrency") {
+        } else if (argument == "--depth" || argument == "--max-pages" || argument == "--workers" || argument == "--concurrency" || argument == "--max-per-host" || argument == "--burst-per-host") {
             if (index + 1 >= argc) {
                 std::cerr << "fluxcrawl: " << argument << " requires a non-negative integer.\n";
                 return 1;
@@ -76,12 +99,17 @@ int main(int argc, char* argv[])
                 std::cerr << "fluxcrawl: " << argument << " requires a non-negative integer.\n";
                 return 1;
             }
-            if (argument == "--workers" || argument == "--concurrency") {
+            if (argument == "--workers" || argument == "--concurrency" || argument == "--max-per-host" || argument == "--burst-per-host") {
                 if (number == 0) {
                     std::cerr << "fluxcrawl: " << argument << " must be greater than zero.\n";
                     return 1;
                 }
-                if (argument == "--workers") {
+                if (argument == "--max-per-host") {
+                    options.scheduling.max_per_host = number;
+                } else if (argument == "--burst-per-host") {
+                    burst = number;
+                    burst_supplied = true;
+                } else if (argument == "--workers") {
                     workers = number;
                     workers_supplied = true;
                 } else {
@@ -102,6 +130,11 @@ int main(int argc, char* argv[])
         }
     }
 
+    if (burst_supplied && !options.scheduling.rate) {
+        std::cerr << "fluxcrawl: --burst-per-host requires --rate-per-host.\n";
+        return 1;
+    }
+    if (options.scheduling.rate) { options.scheduling.rate->burst = burst; }
     if (workers_supplied && engine != "threaded") {
         std::cerr << "fluxcrawl: --workers requires --engine threaded.\n";
         return 1;
@@ -133,6 +166,14 @@ int main(int argc, char* argv[])
             std::cout << "Seed: " << url->canonical() << "\nEngine: " << engine;
             if (engine == "threaded") { std::cout << "\nWorkers: " << workers; }
             if (engine == "async") { std::cout << "\nConcurrency: " << concurrency; }
+            std::cout << "\nMax per host: ";
+            if (options.scheduling.max_per_host) { std::cout << *options.scheduling.max_per_host; }
+            else { std::cout << "unlimited"; }
+            std::cout << "\nRate per host: ";
+            if (options.scheduling.rate) {
+                std::cout << options.scheduling.rate->requests_per_second
+                          << " requests/s; burst " << options.scheduling.rate->burst;
+            } else { std::cout << "disabled"; }
             std::cout
                       << "\nMax depth: " << options.max_depth
                       << "\nMax pages: " << options.max_pages

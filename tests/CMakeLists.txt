@@ -109,3 +109,7 @@ set_tests_properties(scheduling.integration PROPERTIES TIMEOUT 120)
 add_test(NAME scheduling.stress COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/host_integration.py" "$<TARGET_FILE:fluxcrawl_host_crawler_test>" --stress)
 set_tests_properties(scheduling.stress PROPERTIES TIMEOUT 120 LABELS stress)
+
+add_test(NAME cli.scheduling COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/scheduling_cli_test.py" "$<TARGET_FILE:fluxcrawl>")
+set_tests_properties(cli.scheduling PROPERTIES TIMEOUT 30)
