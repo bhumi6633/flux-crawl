@@ -64,6 +64,9 @@ std::vector<Url> HtmlLinkExtractor::extract_links(std::string_view html, const U
     auto* nodes = matches->nodesetval;
     xmlXPathNodeSetSort(nodes);
     std::unordered_set<Url> seen;
+    // The base is fixed for this document. Own decoded/trimmed references: href
+    // storage is freed each iteration, and distinct references can still canonicalize equally.
+    std::unordered_set<std::string> references;
     std::vector<Url> links;
     for (int index = 0; index < nodes->nodeNr; ++index) {
         const std::unique_ptr<xmlChar, XmlStringDeleter> href{xmlNodeGetContent(nodes->nodeTab[index])};
@@ -71,6 +74,7 @@ std::vector<Url> HtmlLinkExtractor::extract_links(std::string_view html, const U
             continue;
         }
         const auto reference = trim_html_space(reinterpret_cast<const char*>(href.get()));
+        if (!references.emplace(reference).second) { continue; }
         auto url = Url::resolve(base_url, reference);
         if (url && seen.insert(*url).second) {
             links.push_back(std::move(*url));
