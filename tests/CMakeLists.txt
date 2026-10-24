@@ -93,3 +93,9 @@ fluxcrawl_enable_warnings(fluxcrawl_profiling_test)
 add_test(NAME core.profiling COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/http_server.py" "$<TARGET_FILE:fluxcrawl_profiling_test>")
 set_tests_properties(core.profiling PROPERTIES TIMEOUT 90)
+
+add_executable(fluxcrawl_host_scheduler_test host_scheduler_test.cpp)
+target_link_libraries(fluxcrawl_host_scheduler_test PRIVATE FluxCrawl::core)
+fluxcrawl_enable_warnings(fluxcrawl_host_scheduler_test)
+add_test(NAME core.host_scheduler COMMAND fluxcrawl_host_scheduler_test)
+set_tests_properties(core.host_scheduler PROPERTIES TIMEOUT 10)

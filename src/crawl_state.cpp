@@ -1,4 +1,5 @@
 #include <fluxcrawl/crawl_state.hpp>
+#include <fluxcrawl/host_scheduler.hpp>
 
 namespace fluxcrawl {
 
@@ -10,6 +11,11 @@ CrawlState::CrawlState(Url seed, std::size_t max_depth) : max_depth_{max_depth}
 std::optional<CrawlItem> CrawlState::next()
 {
     return frontier_.pop();
+}
+
+void CrawlState::schedule_pending(HostScheduler& scheduler)
+{
+    while (auto item = next()) { scheduler.enqueue(std::move(*item)); }
 }
 
 bool CrawlState::discover(const Url& url, std::size_t depth)

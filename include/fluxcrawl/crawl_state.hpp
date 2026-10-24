@@ -5,6 +5,7 @@
 #include <unordered_set>
 
 namespace fluxcrawl {
+class HostScheduler;
 
 // Single-threaded discovery state. Seen means accepted, not fetched or completed.
 class CrawlState {
@@ -12,6 +13,8 @@ public:
     CrawlState(Url seed, std::size_t max_depth);
 
     [[nodiscard]] std::optional<CrawlItem> next();
+    // Move accepted discoveries into scheduling; seen identity remains here.
+    void schedule_pending(HostScheduler& scheduler);
     // False means duplicate or beyond the inclusive depth limit; state is unchanged.
     [[nodiscard]] bool discover(const Url& url, std::size_t depth);
     [[nodiscard]] bool discover_from(const CrawlItem& parent, const Url& url);
