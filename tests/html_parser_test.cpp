@@ -57,6 +57,10 @@ int main()
             {"http://other.example:8080/a", "https://other.example/b"}},
         {"canonical duplicates", R"html(<a href="/docs">1</a><a href="/docs">2</a><a href="/docs#intro">3</a><a href="https://EXAMPLE.com:443/docs">4</a><a href="/a/../docs">5</a>)html",
             {"https://example.com/docs"}},
+        {"decoded trimmed repeats preserve first occurrence", R"html(<a href=" /one?a=1&amp;b=2 ">1</a><a href="/two">2</a><a href="&#47;one?a=1&#38;b=2">3</a><a href="/one?a=1&amp;b=2#x">4</a><a href="/three">5</a>)html",
+            {"https://example.com/one?a=1&b=2", "https://example.com/two", "https://example.com/three"}},
+        {"repeated invalid references do not suppress valid links", R"html(<a href="/%GG">1</a><a href="/one">2</a><a href="/%GG">3</a><a href="javascript:x">4</a><a href="javascript:x">5</a><a href="/two">6</a>)html",
+            {"https://example.com/one", "https://example.com/two"}},
         {"fragment targets", R"html(<a href="/docs">1</a><a href="/docs#one">2</a><a href="/docs#two">3</a><a href="#intro">4</a><a href="#end">5</a>)html",
             {"https://example.com/docs", "https://example.com/docs/index.html"}},
         {"unsupported schemes", R"html(<a href="mailto:hello@example.com">M</a><a href="javascript:void(0)">J</a><a href="ftp://example.com/file">F</a><a href="data:text/plain,hello">D</a><a href="tel:+123456789">T</a><a href="/valid">V</a>)html",
@@ -137,6 +141,26 @@ int main()
     check("many duplicates", repeated, {"https://example.com/repeat"});
     for (int iteration = 0; iteration < 100; ++iteration) {
         check("independent calls", "<a href='/repeat'>R</a>", {"https://example.com/repeat"});
+    }
+    // Exercise owning-reference lifetimes beyond small-string storage, including rehashes.
+    std::string unique_html;
+    std::vector<std::string> canonical;
+    for (int index = 0; index < 300; ++index) {
+        const auto reference = "/" + std::string(80, 'a') + std::to_string(index);
+        unique_html += "<a href='" + reference + "'>U</a>";
+        canonical.push_back("https://example.com" + reference);
+    }
+    std::vector<std::string_view> expected_unique;
+    for (const auto& value : canonical) { expected_unique.push_back(value); }
+    check("unique long hrefs and repeated document preserve order", unique_html + unique_html, expected_unique);
+    for (const auto host : {"first.example", "second.example"}) {
+        ++checks;
+        const auto other_base = fluxcrawl::Url::parse(std::string{"https://"} + host + "/dir/index").value();
+        const auto links = extractor.extract_links("<a href='child'>1</a><a href='child'>2</a>", other_base);
+        if (links.size() != 1 || links.front().canonical() != std::string{"https://"} + host + "/dir/child") {
+            ++failures;
+            std::cerr << "FAIL: references never leak across bases or documents\n";
+        }
     }
     std::cout << checks << " HTML checks, " << failures << " failures\n";
     return failures == 0 ? 0 : 1;
