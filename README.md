@@ -261,8 +261,8 @@ Seed -> CrawlState -> SequentialCrawler -> HttpClient -> HttpResponse
             +-- discovered URLs <- HtmlLinkExtractor
 ```
 
-Each iteration pops FIFO work, records a fetch attempt, and processes the fetch
-result. Only 2xx responses with the exact case-insensitive media type `text/html`
+Each iteration claims eligible host-scheduled work, records a fetch attempt,
+and processes the fetch result. Only 2xx responses with the exact case-insensitive media type `text/html`
 (ignoring surrounding whitespace and parameters) are extracted. At maximum depth,
 the response is recorded without extracting links. Other statuses, missing types,
 and non-HTML types never produce discoveries. Extraction uses the effective URL
@@ -270,8 +270,9 @@ after redirects. Fetch errors are recorded and the remaining queue continues;
 there are no retries. Malformed HTML uses the existing parser's recovery behavior.
 
 All discoveries go through `CrawlState::discover_from`; no second seen set exists.
-Depth 0 is the seed, and limits are inclusive. FIFO and parser document order yield
-BFS. `max_pages` counts logical fetch attempts, including failures and HTTP errors;
+Depth 0 is the seed, and limits are inclusive. Depth barriers preserve BFS;
+within a depth, hosts rotate fairly and each host retains discovery order.
+`max_pages` counts logical fetch attempts, including failures and HTTP errors;
 redirect hops are part of the same attempt. Zero pages performs no fetches, leaving
 the seed discovered and pending. The final permitted response is still processed,
 so it can leave discoveries queued when the page budget is exhausted.
@@ -329,15 +330,16 @@ sequential includes remain compatible.
                    publish links and metadata
 ```
 
-The private coordinator has one mutex protecting the frontier (including a single
-lookahead item), seen set, active count, attempt count, fatal error, and result
-aggregation. Claiming an item reserves its attempt budget and increments active
+The private coordinator has one mutex protecting discovery and host queues,
+seen set, host/global active counts, token buckets, attempt count, fatal error,
+and result aggregation. Claiming an item reserves its attempt budget and increments active
 work in the same critical section. Fetching and parsing run outside the lock.
 Publishing performs the canonical seen check, insertion, enqueue, and result
 update under the lock, then decrements active work and notifies all waiters.
 
-The condition-variable predicate wakes for a fatal error, an exhausted attempt
-budget, no active work, or available FIFO work at the active depth. A worker exits
+Workers recheck eligibility after notifications, spurious wakeups, and the earliest
+token deadline using `condition_variable::wait_until`, which releases the mutex.
+A worker exits
 normally only when the budget is spent or no queued/active work remains. Temporary
 frontier emptiness never implies termination while another worker can discover
 links. Existing claims finish even after the budget is reached; all their results
@@ -347,8 +349,8 @@ Workers run concurrently within each depth level; the next level waits for the
 current active level to finish. This small depth barrier preserves shortest first
 discovery and the sequential reachable set under depth limits: otherwise a fast
 long path can mark a URL seen too deeply before a slow shorter path arrives.
-It does not impose ordering within a level. FIFO acquisition, publication, and
-record order are scheduling-dependent; threaded records use publication order.
+It does not impose completion ordering within a level. Round-robin acquisition,
+publication, and record order are scheduling-dependent; threaded records use publication order.
 With a truncating page limit, the particular attempted subset can differ from
 sequential even though the exact budget is respected. Without truncation, the
 engines agree on requested URL/depth sets for a stable graph.
@@ -407,18 +409,20 @@ Libcurl/system resolver internals may use threads.
                        HTML extraction + CrawlState
 ```
 
-The loop fills eligible FIFO slots, calls `curl_multi_perform`, drains every
+The loop fills eligible host-scheduled slots, calls `curl_multi_perform`, drains
+every
 `CURLMSG_DONE` from `curl_multi_info_read`, processes responses, and refills slots
 before waiting. Newly added handles get a perform call before the next wait.
 [`curl_multi_poll`](https://curl.se/libcurl/c/curl_multi_poll.html) waits up to
-1000 ms, honoring shorter internal libcurl timers. Unlike `curl_multi_wait`, it
+1000 ms, shortened by the next host token deadline and internal libcurl timers.
+Unlike `curl_multi_wait`, it
 also sleeps when there are no descriptors, so zero descriptors are normal and do
 not cause a busy loop or false failure. It is supported by the existing libcurl
 7.85 minimum.
 
 Concurrency bounds active logical transfers, including redirects, rather than
-threads or fixed batches. Completion frees a slot immediately for eligible FIFO
-work, even while other transfers remain active. As with the threaded engine,
+threads or fixed batches. Completion frees a slot immediately for eligible
+host-scheduled work, even while other transfers remain active. As with the threaded engine,
 advancing to the next depth waits for the current depth to finish. This depth
 barrier preserves shortest first discovery under inclusive depth limits; it does
 not batch same-depth transfers. At a level boundary some capacity can be idle.
@@ -449,8 +453,10 @@ requires both `active < concurrency` and `attempted < max_pages`. Existing activ
 transfers finish and publish their discoveries after the budget is exhausted.
 Zero pages performs no transfers. An empty frontier with active work keeps waiting;
 termination requires no active transfers and either no pending work or no budget.
-The one-item FIFO lookahead is included in pending counts. `CrawlState` handles all
-canonical deduplication and depth acceptance without synchronization.
+Pending counts include all host queues, including rate-limited work. With no
+active transfers, the loop sleeps until the next eligibility deadline and resumes.
+`CrawlState` handles canonical deduplication and depth acceptance; `HostScheduler`
+handles claims, fairness, depth barriers, and per-origin eligibility.
 
 Individual HTTP/client failures become records and allow siblings to continue.
 404/500/503/429 remain responses. Oversized decoded bodies abort only that transfer;
@@ -789,3 +795,26 @@ confirmed the benefit. Network and low-duplicate workloads showed no meaningful
 improvement. The cache adds per-document storage, and measured memory accounting
 was mixed. See the [optimization report](docs/optimization-report.md) for full
 before/after latency, variance, profiler evidence, memory tradeoffs and reproduction.
+
+## Host-aware scheduling and politeness
+
+All three engines use a shared origin scheduler with round-robin fairness,
+per-origin concurrency caps and optional token-bucket rate limiting:
+
+```sh
+./build/fluxcrawl --engine async --concurrency 32 --max-per-host 4 \
+  --rate-per-host 10 --burst-per-host 1 --depth 3 --max-pages 500 https://example.com
+```
+
+Global concurrency limits total active work. `--max-per-host` limits active claims
+for one normalized scheme/host/effective-port origin. `--rate-per-host` controls
+admission frequency, and `--burst-per-host` controls initial/accumulated tokens.
+Caps default to unlimited relative to global concurrency; rate limiting defaults
+to disabled and configured burst defaults to one. Fairness applies among eligible
+hosts at the current breadth-first depth, without promising completion order.
+
+Redirect hops remain charged to the original requested origin; this is not a
+per-hop rate guarantee. `--same-host` remains hostname-only discovery filtering.
+The original benchmark runner requires disabled politeness limits. An optional
+multi-origin scenario records its limits separately. See
+[host scheduling architecture, tests and reproduction](docs/host-scheduling.md).

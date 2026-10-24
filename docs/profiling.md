@@ -63,11 +63,11 @@ validation. Ordinary crawl/benchmark calls produce no detailed profile.
 | Request latency (existing metric) | Blocking fetch or async attached-transfer lifetime until its completion is observed. Includes HTTP work; async observation can be delayed by other completion processing. Not pure network wait. |
 | `extraction_ms` | Entire `HtmlLinkExtractor` call: DOM parsing, XPath, href extraction, URL resolution/normalization, per-page deduplication, vector construction, and extractor cleanup. Not libxml CPU time alone. |
 | `discovery_ms` | Iteration of extracted unique links, same-host filter, global seen lookup/insertion and enqueue. Excludes resolution, which is inside extraction. |
-| `frontier_ms` | Sequential/async queue pops. Threaded acquisition bookkeeping plus publication while holding the coordination lock, including discovery and result updates. Excludes initial state construction and final aggregation. Engine boundaries differ deliberately; do not compare this column as identical work. |
+| `frontier_ms` | Sequential/async scheduler acquisition attempts (including unsuccessful attempts). Threaded acquisition bookkeeping plus publication while holding the coordination lock, including discovery and result updates. Excludes initial state construction and final aggregation. Engine boundaries differ deliberately; do not compare this column as identical work. |
 | `lock_wait_ms` | Sum of elapsed time immediately around explicit acquire/publish mutex lock calls, including uncontended lock cost. Excludes CV reacquisition and fatal exception cleanup (failed crawls return no profile). |
-| `worker_idle_ms` | Sum of each `condition_variable::wait` call through return with the mutex reacquired. Includes spurious wakeups and reacquisition, which cannot be separated portably. |
+| `worker_idle_ms` | Sum of each `condition_variable::wait` or `wait_until` call through return with the mutex reacquired. Includes spurious wakeups and reacquisition, which cannot be separated portably. |
 | `worker_activity_ms` | Sum of claimed-request intervals through publication: HTTP, extraction, publication lock wait, and discovery. Not CPU utilization. Acquire-side lock wait and time outside requests are excluded. |
-| `multi_wait_ms` | Time in `curl_multi_poll`, including poll overhead and readiness/timer waits. Not all network waiting: transfers also progress during other loop work. |
+| `multi_wait_ms` | Time in `curl_multi_poll`, including poll overhead and readiness/timer waits. Excludes no-active-transfer sleeps until host rate deadlines. Not all network waiting: transfers also progress during other loop work. |
 | `completion_processing_ms` | Drain of `curl_multi_info_read`, detach, metadata conversion, extraction, discovery, record publication and completed-transfer destruction. Excludes `curl_multi_perform` and refill. |
 | `refill_ms` | Every refill invocation, including frontier selection, transfer allocation/configuration and multi attachment. Setup-failure publication is included if it occurs. |
 
@@ -182,3 +182,15 @@ this phase adds no reserve-capacity or allocator optimizations.
 
 See [the initial measured report](../profiling-report.md) for this machine's
 results and limitations.
+
+## Host scheduling (Step 11)
+
+The original benchmark runner rejects configured host caps/rates, so its existing
+CSV always represents unlimited per-origin policy. `CrawlOptions::scheduling`
+applies to library crawls and the regular crawl CLI. Existing profiling fields
+remain available to library callers: threaded idle time includes rate-deadline
+waits; async `multi_wait_ms` excludes rate-only sleeping with no active transfers.
+No separate host-block/rate-wait counters are claimed. Host queue publication is
+inside threaded frontier time and async completion time; sequential publication
+is outside frontier time. See [host scheduling](host-scheduling.md) for the
+separate multi-origin scenario and its explicitly recorded policy metadata.
