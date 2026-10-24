@@ -760,3 +760,21 @@ Existing local `lab4/` and `lab5/` coursework is separate from FluxCrawl and is
 not included in its build.
 
 Released under the [MIT license](LICENSE).
+
+## Profiling and scaling analysis
+
+Benchmarking tells you how fast; optional profiling helps explain where time
+is spent. After starting the loopback benchmark server, use:
+
+```sh
+build-release/fluxcrawl benchmark --seed http://127.0.0.1:8080/page/0 \
+  --scenario latency-bound --engine all --concurrency 1,4,8,16 \
+  --runs 3 --profile --output results/profile.csv
+```
+
+Run the same sweep without `--profile` for headline throughput. Profiles include
+HTML extraction/URL resolution, global discovery, worker lock and idle waits,
+and async event-loop behavior. Categories overlap and do not measure CPU
+utilization. New `link-heavy` and `mixed-latency` scenarios expose processing
+costs and out-of-order completions. See [profiling definitions and external-tool
+commands](docs/profiling.md) and the [measured analysis](profiling-report.md).

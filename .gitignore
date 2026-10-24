@@ -36,3 +36,9 @@ __pycache__/
 /benchmark_results.csv
 
 /results/
+
+# Raw external profiling captures (keep intentional reports in Markdown)
+/perf.data
+/perf.data.old
+/*.trace/
+/*.dtps/
