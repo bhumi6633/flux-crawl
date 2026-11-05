@@ -83,6 +83,27 @@ void HostScheduler::enqueue(CrawlItem item)
     ++count->second;
     ++pending_;
 }
+void HostScheduler::delay(CrawlItem item, Time eligible_at)
+{
+    const auto depth = item.depth;
+    auto [count, inserted] = depths_.try_emplace(depth, 0);
+    try { delayed_.emplace(eligible_at, std::move(item)); }
+    catch (...) { if (inserted) { depths_.erase(count); } throw; }
+    ++count->second;
+    ++pending_;
+}
+void HostScheduler::promote(Time now)
+{
+    while (!delayed_.empty() && delayed_.begin()->first <= now) {
+        auto entry = delayed_.begin();
+        const auto depth = entry->second.depth;
+        // Copy first: allocation failure preserves the delayed entry.
+        enqueue(entry->second);
+        --pending_;
+        --depths_.at(depth);
+        delayed_.erase(entry);
+    }
+}
 bool HostScheduler::depth_eligible() const noexcept
 {
     return pending_ != 0 && active_ < global_limit_
@@ -90,6 +111,7 @@ bool HostScheduler::depth_eligible() const noexcept
 }
 std::optional<HostScheduler::Lease> HostScheduler::acquire(Time now)
 {
+    promote(now);
     if (!depth_eligible()) { return std::nullopt; }
     const auto depth = depths_.begin()->first;
     const auto candidates = ready_.size();
@@ -115,8 +137,10 @@ std::optional<HostScheduler::Lease> HostScheduler::acquire(Time now)
 }
 std::optional<HostScheduler::Time> HostScheduler::next_deadline(Time now)
 {
+    promote(now);
     if (!depth_eligible()) { return std::nullopt; }
     std::optional<Time> deadline;
+    if (!delayed_.empty()) { deadline = delayed_.begin()->first; }
     for (auto* host : ready_) {
         if (host->queues.begin()->first != depths_.begin()->first
             || host->active >= options_.max_per_host.value_or(global_limit_)) { continue; }

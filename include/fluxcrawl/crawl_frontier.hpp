@@ -11,6 +11,7 @@ namespace fluxcrawl {
 struct CrawlItem {
     Url url;
     std::size_t depth;
+    std::size_t retry_count = 0; // Attempt state, excluded from canonical identity.
 };
 
 // Single-threaded FIFO work storage; discovery policy belongs to CrawlState.

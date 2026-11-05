@@ -68,6 +68,8 @@ public:
     HostScheduler(const HostScheduler&) = delete;
     HostScheduler& operator=(const HostScheduler&) = delete;
     void enqueue(CrawlItem item);
+    void delay(CrawlItem item, Time eligible_at);
+    [[nodiscard]] std::size_t delayed() const noexcept { return delayed_.size(); }
     [[nodiscard]] std::optional<Lease> acquire(Time now);
     // Only rate deadlines for depth-eligible hosts with free capacity. Other
     // blocks require completion/publication, not a timer. May return now if a
@@ -82,6 +84,7 @@ private:
         TokenBucket bucket;
         std::size_t active = 0;
     };
+    void promote(Time now);
     bool depth_eligible() const noexcept;
     void finish(Host& host) noexcept;
     SchedulingOptions options_;
@@ -90,5 +93,7 @@ private:
     // Hash-node addresses survive rehash; hosts are never erased.
     std::list<Host*> ready_;
     std::map<std::size_t, std::size_t> depths_;
+    // Ordered deadlines; equivalent-key insertion order supplies stable ties.
+    std::multimap<Time, CrawlItem> delayed_;
 };
 } // namespace fluxcrawl
