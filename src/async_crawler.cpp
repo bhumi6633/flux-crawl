@@ -31,6 +31,7 @@ struct ActiveTransfer {
     HostScheduler::Lease claim;
     detail::CurlTransfer request;
     std::chrono::steady_clock::time_point started;
+    std::chrono::nanoseconds checkpoint_pause{};
 };
 
 class MultiTransfers {
@@ -116,8 +117,13 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
         policy.schedule(state, scheduler, result);
     };
     const auto checkpoint = [&](bool final = false) {
+        const auto started_checkpoint = detail::checkpointing(options) ? HostScheduler::Clock::now() : HostScheduler::Time{};
         if (auto snapshot = checkpoints.capture(state, scheduler, policy, result, final)) {
             detail::CheckpointRuntime::report(result, checkpoints.write(*snapshot));
+            const auto pause = HostScheduler::Clock::now() - started_checkpoint;
+            // The event loop cannot observe completions during snapshot I/O.
+            // Keep this operational pause out of request-latency samples.
+            for (auto& [handle, transfer] : transfers.active) { (void)handle; transfer->checkpoint_pause += pause; }
         }
     };
     const auto fill = [&] {
@@ -171,7 +177,7 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
                 const auto completed = std::chrono::steady_clock::now();
                 const auto code = message->data.result;
                 auto transfer = transfers.remove(message->easy_handle);
-                publish(transfer->request.finish(code), std::move(transfer->claim.item), completed - transfer->started);
+                publish(transfer->request.finish(code), std::move(transfer->claim.item), completed - transfer->started - transfer->checkpoint_pause);
             }
         }
         // Refill after draining completions, before waiting on any remaining siblings.

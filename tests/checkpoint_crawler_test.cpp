@@ -4,6 +4,7 @@
 #include <fluxcrawl/thread_pool_crawler.hpp>
 #include <iostream>
 #include <stdexcept>
+#include <thread>
 using namespace fluxcrawl;
 int main(int argc, char** argv)
 {
@@ -32,6 +33,17 @@ int main(int argc, char** argv)
                 }
             };
         }
+        std::chrono::nanoseconds injected_pause{};
+        if (capture_mode == "pause") {
+            options.max_depth = 0;
+            options.checkpoint.on_snapshot = [&](const CrawlCheckpoint&) {
+                if (injected_pause.count() == 0) {
+                    const auto began = HostScheduler::Clock::now();
+                    std::this_thread::sleep_for(std::chrono::milliseconds{250});
+                    injected_pause = HostScheduler::Clock::now() - began;
+                }
+            };
+        }
         options.profile = true;
         const auto concurrency = std::stoull(argv[8]);
         const auto result = [&] {
@@ -39,6 +51,9 @@ int main(int argc, char** argv)
             if (engine == "threaded") { return ThreadPoolCrawler{concurrency, http}.crawl(seed, options); }
             return AsyncCrawler{concurrency, http}.crawl(seed, options);
         }();
+        if (capture_mode == "pause" && !(result.records.front().latency + injected_pause * 4 / 5 < result.elapsed)) {
+            throw std::runtime_error("Checkpoint pause contaminated async latency");
+        }
         if (result.pages_attempted != result.responses_received + result.fetch_failures + result.attempts_unresolved
             || result.resources_completed + result.urls_pending + result.urls_blocked_by_robots + result.robots_resources_reused != result.urls_discovered
             || !result.checkpoint_errors.empty()) { throw std::runtime_error("Inconsistent cumulative accounting or checkpoint write failure"); }

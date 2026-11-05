@@ -81,6 +81,9 @@ def main():
             assert (0, "/private/blocked") not in after and after[(0, "/")] == 1
             assert {key for key in after if key[1] != "/robots.txt"} == reference - {(0, "/private/blocked")}
             assert sum(n for (h, p), n in after.items() if p == "/robots.txt") > sum(n for (h, p), n in before.items() if p == "/robots.txt")
+        with CheckpointFixture() as site:
+            _, _, paused = run(site, directory, "async", capture="pause", name="pause")
+            assert paused["attempted"] == paused["completed"] == 1
         print("Checkpoint recovery, dedup, depth, retry deadlines, budgets and robots reacquisition passed")
 
 
