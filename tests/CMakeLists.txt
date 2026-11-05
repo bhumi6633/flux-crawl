@@ -149,3 +149,7 @@ set_tests_properties(robots.integration PROPERTIES TIMEOUT 180)
 add_test(NAME robots.stress COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/robots_integration.py" "$<TARGET_FILE:fluxcrawl_robots_crawler_test>" --stress)
 set_tests_properties(robots.stress PROPERTIES TIMEOUT 180 LABELS stress)
+
+add_test(NAME cli.robots COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/robots_cli_test.py" "$<TARGET_FILE:fluxcrawl>")
+set_tests_properties(cli.robots PROPERTIES TIMEOUT 90)

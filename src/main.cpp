@@ -31,6 +31,7 @@ void print_help()
                  "  --max-per-host N   Maximum active claims per origin (default: unlimited)\n"
                  "  --rate-per-host R  Positive requests/sec per origin (default: disabled)\n"
                  "  --burst-per-host N Token capacity (default: 1; requires --rate-per-host)\n"
+                 "  --respect-robots / --ignore-robots  Origin policy (default: ignore)\n"
                  "  --max-retries N  Retries after initial attempt (default: 0, disabled)\n"
                  "  --retry-backoff-ms N      Initial delay (default: 250, positive)\n"
                  "  --retry-max-backoff-ms N  Delay cap (default: 5000, >= initial)\n"
@@ -67,6 +68,8 @@ int main(int argc, char* argv[])
             show_version = true;
         } else if (argument == "--same-host") {
             options.same_host_only = true;
+        } else if (argument == "--respect-robots" || argument == "--ignore-robots") {
+            options.respect_robots = argument == "--respect-robots";
         } else if (argument == "--retry-jitter" || argument == "--no-retry-jitter") {
             options.retry.jitter = argument == "--retry-jitter";
         } else if (argument == "--max-retries" || argument == "--retry-backoff-ms" || argument == "--retry-max-backoff-ms") {
@@ -208,6 +211,17 @@ int main(int argc, char* argv[])
                       << "\nFetch failures: " << result.fetch_failures
                       << "\nURLs discovered: " << result.urls_discovered
                       << "\nURLs pending: " << result.urls_pending << '\n';
+            if (options.respect_robots) {
+                std::cout << "Robots fetches: " << result.robots_fetches
+                    << "\nRobots origins: " << result.robots_origins
+                    << "\nRobots cache hits: " << result.robots_cache_hits
+                    << "\nRobots allowed: " << result.robots_allowed
+                    << "\nURLs blocked by robots: " << result.urls_blocked_by_robots
+                    << "\nRobots fetch failures: " << result.robots_fetch_failures
+                    << "\nRobots retries attempted: " << result.robots_retries_attempted
+                    << "\nRobots retries cancelled: " << result.robots_retries_cancelled
+                    << "\nRobots responses reused: " << result.robots_resources_reused << '\n';
+            }
             if (options.retry.max_retries != 0) {
                 std::cout << "Retries scheduled: " << result.retries_scheduled
                     << "\nRetries attempted: " << result.retries_attempted
@@ -219,7 +233,7 @@ int main(int argc, char* argv[])
                     << "\nTerminal HTTP failures: " << result.terminal_http_failures
                     << "\nTerminal fetch failures: " << result.terminal_fetch_failures << '\n';
             }
-            return result.terminal_fetch_failures == 0
+            return result.robots_fetch_failures == 0 && result.terminal_fetch_failures == 0
                 && (options.retry.max_retries == 0 || result.terminal_http_failures == 0) ? 0 : 1;
         } catch (const std::exception& error) {
             std::cerr << "fluxcrawl: " << error.what() << '\n';
