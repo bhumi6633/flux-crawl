@@ -25,6 +25,7 @@ class MultiOrigin(AbstractContextManager):
         self.global_peak = 0
         self.starts = []
         self.counts = Counter()
+        self.user_agents = []
 
     def __enter__(self):
         try:
@@ -53,7 +54,7 @@ class MultiOrigin(AbstractContextManager):
     def snapshot(self):
         with self.lock:
             return {"peak_per_origin": self.peak[:], "global_peak": self.global_peak,
-                    "starts": self.starts[:], "counts": dict(self.counts), "active": self.active[:]}
+                    "starts": self.starts[:], "user_agents": self.user_agents[:], "counts": dict(self.counts), "active": self.active[:]}
 
     def response(self, origin, path):
         status, headers = 200, {}
@@ -129,12 +130,16 @@ class Handler(BaseHTTPRequestHandler):
             fixture.peak[origin] = max(fixture.peak[origin], fixture.active[origin])
             fixture.global_peak = max(fixture.global_peak, sum(fixture.active))
             fixture.starts.append((origin, self.path, time.monotonic()))
+            fixture.user_agents.append(self.headers.get("User-Agent", ""))
             fixture.counts[(origin, self.path)] += 1
         active = True
         try:
             time.sleep(fixture.delays[origin])
             with fixture.lock:
                 attempt = fixture.counts[(origin, self.path)]
+            if getattr(fixture, "close_request", lambda *_: False)(origin, self.path):
+                self.close_connection = True
+                return
             if self.path == "/close" and (fixture.graph == "failures" or fixture.graph == "retry" and attempt == 1):
                 self.close_connection = True
                 return

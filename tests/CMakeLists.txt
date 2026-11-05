@@ -133,3 +133,19 @@ set_tests_properties(retry.stress PROPERTIES TIMEOUT 120 LABELS stress)
 add_test(NAME cli.retry COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/retry_cli_test.py" "$<TARGET_FILE:fluxcrawl>")
 set_tests_properties(cli.retry PROPERTIES TIMEOUT 90)
+
+add_executable(fluxcrawl_robots_policy_test robots_policy_test.cpp)
+target_link_libraries(fluxcrawl_robots_policy_test PRIVATE FluxCrawl::core)
+fluxcrawl_enable_warnings(fluxcrawl_robots_policy_test)
+add_test(NAME core.robots_policy COMMAND fluxcrawl_robots_policy_test)
+set_tests_properties(core.robots_policy PROPERTIES TIMEOUT 10)
+
+add_executable(fluxcrawl_robots_crawler_test robots_crawler_test.cpp)
+target_link_libraries(fluxcrawl_robots_crawler_test PRIVATE FluxCrawl::core)
+fluxcrawl_enable_warnings(fluxcrawl_robots_crawler_test)
+add_test(NAME robots.integration COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/robots_integration.py" "$<TARGET_FILE:fluxcrawl_robots_crawler_test>")
+set_tests_properties(robots.integration PROPERTIES TIMEOUT 180)
+add_test(NAME robots.stress COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/robots_integration.py" "$<TARGET_FILE:fluxcrawl_robots_crawler_test>" --stress)
+set_tests_properties(robots.stress PROPERTIES TIMEOUT 180 LABELS stress)
