@@ -13,6 +13,7 @@ struct CrawlItem {
     std::size_t depth;
     std::size_t retry_count = 0; // Attempt state, excluded from canonical identity.
     bool policy_request = false;
+    bool recovery = false;
 };
 
 // Single-threaded FIFO work storage; discovery policy belongs to CrawlState.

@@ -5,6 +5,7 @@
 #include <fluxcrawl/http_response.hpp>
 
 #include <fluxcrawl/profiling.hpp>
+#include <fluxcrawl/checkpoint_control.hpp>
 #include <fluxcrawl/retry_policy.hpp>
 #include <vector>
 #include <chrono>
@@ -19,6 +20,8 @@ struct CrawlOptions {
     SchedulingOptions scheduling{};
     RetryPolicy retry{};
     bool respect_robots = false;
+    CheckpointControl checkpoint{};
+    std::shared_ptr<const CrawlCheckpoint> resume_from{};
 };
 
 struct CrawlResponseMetadata {
@@ -41,6 +44,10 @@ struct CrawlResult {
     std::size_t robots_allowed = 0, urls_blocked_by_robots = 0, robots_fetch_failures = 0;
     std::size_t robots_retries_scheduled = 0, robots_retries_attempted = 0;
     std::size_t robots_resources_reused = 0, robots_retries_cancelled = 0;
+    std::size_t recovery_attempts = 0, recovery_retry_attempts = 0;
+    std::size_t attempts_unresolved = 0, robots_attempts_unresolved = 0;
+    std::size_t checkpoints_written = 0, checkpoint_bytes = 0;
+    std::vector<std::string> checkpoint_errors; // Session diagnostics, not persisted.
     std::size_t pages_attempted = 0;
     std::size_t responses_received = 0;
     // All HttpError results, including transport, body-limit, and metadata failures.
