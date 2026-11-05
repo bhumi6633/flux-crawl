@@ -280,7 +280,7 @@ so it can leave discoveries queued when the page budget is exhausted.
 `CrawlResult` contains `pages_attempted`, `responses_received`, `fetch_failures`,
 `html_pages_processed`, `urls_discovered`, `urls_pending`, and ordered `records`.
 Discovered means accepted into crawl state, including the seed; attempted means
-`fetch` was invoked; responded means an `HttpResponse` was returned. Fetch failures
+a request attempt was reserved, including setup; responded means an `HttpResponse` was returned. Fetch failures
 include all `HttpError` categories, including client limits and invalid metadata.
 HTML processed counts actual extraction calls, excluding depth-boundary pages.
 Each resource-attempt record stores its `CrawlItem` and either response metadata (effective URL,
@@ -294,7 +294,7 @@ mark that final URL separately seen, so it can be fetched again if independently
 discovered. Page limits bound attempts, not the size of the discovered frontier.
 These semantics are the reference behavior shared by all three engines.
 Host concurrency caps, token-bucket rate limiting, and delayed retries are optional.
-Robots policy is optional; persistence is not implemented.
+Robots policy is optional; snapshot checkpoint/resume is supported (see below).
 
 The loopback crawl graph has `/crawl/ -> [a,b,shared,redirect-start]`,
 `a -> [deep,shared]`, `b -> [shared,/crawl/]`, and
@@ -902,3 +902,54 @@ An explicitly discovered `/robots.txt` can reuse the completed bootstrap without
 another network fetch; this is reported separately from resource attempts.
 
 See [robots architecture, semantics, tests and verification](docs/robots.md).
+
+
+## Durable snapshots and resume
+
+Checkpointing is disabled by default. Enable periodic resource-attempt snapshots
+and a final snapshot on normal return:
+
+```sh
+./build/fluxcrawl --engine threaded --workers 8 --checkpoint crawl.chk \
+  --checkpoint-every 100 --depth 5 --max-pages 10000 https://example.test
+./build/fluxcrawl resume crawl.chk --engine async --concurrency 32
+```
+
+`--stop-after-attempts N` provides a graceful stop at an absolute cumulative
+attempt count when checkpointing is enabled. This is distinct from the immutable
+page budget: resume can continue the remaining budget. No signal-handler I/O is
+implemented; after abrupt termination, resume uses the last valid periodic file.
+
+Format version one stores canonical seen URLs, unfinished resources with depth
+and retry metadata, cumulative counters, seed, semantic crawl/HTTP configuration,
+and previously computed retry deadlines as Unix milliseconds. It excludes bodies,
+DOMs, handles, threads, detailed record history, profiling, RNG state and parsed
+robots policies. Format compatibility is separate from application version.
+
+Active work is restored as pending and may be fetched again: **at-least-once**,
+not exactly-once. Its prior reserved attempt remains counted; a recovery reissue
+consumes another attempt. Work known complete or policy-skipped at the snapshot
+boundary stays seen and is not requeued. Activity after the last snapshot can be
+lost; snapshot-only recovery cannot count that unrecorded suffix precisely.
+
+Semantic configuration from the file cannot be overridden on resume. Engine,
+worker/concurrency counts, snapshot destination/cadence and graceful stop threshold
+can change. Delayed retries retain their chosen deadline; downtime counts, with
+expired deadlines immediately eligible. Wall-clock changes can affect remaining
+waits. Host active counts start at zero, rate buckets restart empty, and robots
+policy is reacquired for unfinished origins before requests run.
+
+Writes use an exclusive temporary file in the destination directory, checked
+flush/close, POSIX file fsync where available, read-back validation, then rename.
+Atomic replacement protects against partial primary files on supported filesystems;
+it is not a universal power-loss durability guarantee. Checkpoint failures are
+reported while crawling continues, and the CLI returns failure if one occurred.
+Invalid/unreadable resume files fail startup; there is no fresh-crawl fallback.
+
+Cumulative operational counters survive restart. Request records, latency samples,
+elapsed/profiling and throughput baselines describe the new process session.
+Checkpoint count, bytes and I/O time are reported separately; async snapshot pauses
+are excluded from request latency samples. Baseline benchmarks reject checkpoint
+or resume configurations. Runtime `.chk` files and temporary snapshots are ignored.
+
+See [format, consistency, durability, tests and recovery limits](docs/checkpointing.md).

@@ -57,7 +57,7 @@ struct CrawlResult {
     std::size_t fetch_failures = 0;
     std::size_t retries_scheduled = 0, retries_attempted = 0, retries_exhausted = 0;
     std::size_t responses_recovered_after_retry = 0, retry_after_used = 0;
-    std::size_t retries_cancelled = 0; // Scheduled but not attempted at budget stop.
+    std::size_t retries_cancelled = 0; // Scheduled but unexecuted at stop; resumable from a snapshot.
     std::size_t resources_completed = 0, terminal_http_failures = 0, terminal_fetch_failures = 0;
     std::size_t html_pages_processed = 0;
     std::size_t urls_discovered = 0; // Accepted by CrawlState, including the seed.

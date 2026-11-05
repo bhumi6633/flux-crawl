@@ -1,7 +1,7 @@
 # Retry policy and delayed scheduling
 
 Step 12 adds optional retries to all three engines. It adds no scheduling thread,
-retry worker, persistence, adaptive throttling or HTTP cache. Step 13 composes
+retry worker, adaptive throttling or HTTP cache. Step 13 composes
 robots bootstrap with the same retry mechanism; see [robots policy](robots.md).
 The clean Step 11 baseline passed 50/50 tests before implementation.
 
@@ -255,15 +255,18 @@ one recovered/completed resource, one discovered URL, zero pending, zero exhaust
 zero terminal failures, exit status zero. The fixture records exactly three
 requests. All traffic stays on loopback.
 
-## Before robots or persistence
+## Robots composition and snapshot recovery
 
 Robots policy now remains separate from retry classification and accounts for
 its infrastructure attempts explicitly. Robots attempts have separate records and
-counters; CommonProfile outcome decisions include infrastructure evaluations. Persistence needs to store logical discovery
-and attempt state separately, define how cancelled/pending retries resume, and
-convert remaining steady-clock delays into restart-safe data; raw steady-clock
-epoch timestamps cannot be persisted across process restarts. Existing redirect
-origin-accounting and lack of an overall cancellation API remain explicit limits.
+counters; CommonProfile outcome decisions include infrastructure evaluations.
+[Step 14 snapshots](checkpointing.md) preserve logical discovery and unfinished
+retry state separately, storing chosen deadlines as wall-clock Unix milliseconds.
+Raw steady-clock epochs are never persisted. Unexecuted resource retries can resume;
+robots bootstrap restarts Unknown. A recovered in-flight attempt retains its retry
+index and consumes a fresh global attempt, tracked separately from policy retries.
+Existing redirect origin-accounting and lack of an overall cancellation API remain
+explicit limits.
 
 ## Verification — 2026-11-04
 

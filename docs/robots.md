@@ -237,7 +237,7 @@ The stress test is labeled separately. Timings are not performance conclusions.
 identity parity, explicit ignore compatibility and benchmark rejection. All
 traffic uses local servers; no public robots file is used as test data.
 
-## Reproduction and boundaries before persistence
+## Reproduction and snapshot recovery boundaries
 
 ```sh
 cmake -S . -B build
@@ -263,10 +263,12 @@ robots fetches for four origins, 13 cache hits, 15 allowed, two blocked, four
 bootstrap responses reused, one robots retry, zero acquisition failures, exit
 zero**. Server robots request counts are `[1,1,1,2]`; denied resources never arrive.
 
-Before persistence, define cache freshness/revalidation and whether denied,
-unavailable, held and cancelled work resumes. Persist policy/attempt state
-separately from global seen identity, and convert steady deadlines into
-restart-safe remaining delays. There is no cross-run cache yet.
+[Step 14 snapshots](checkpointing.md) now preserve discovery and unfinished work,
+while reacquiring robots policy for unfinished origins after restart. Previously
+blocked/completed URLs remain seen and are not requeued. Parsed policy/cache state
+still has no cross-run persistence or TTL. Across resumed sessions, allowed/cache-hit
+counters include reevaluation of unfinished work; origin counts can count a fresh
+bootstrap operation for an already encountered origin.
 
 **Redirect limitation:** policy checks protect requested crawl items, not every
 HTTP redirect hop. Both ordinary and robots transfers can follow redirects under
@@ -274,7 +276,7 @@ the existing HTTP client rules, potentially contacting another origin/path
 without consulting its robots cache or moving its host lease. Supporting per-hop
 policy enforcement requires a separate redirect design. Robots rules are advisory
 crawl policy, not access authorization. There is no sitemap crawling, Crawl-delay,
-persistence, SQLite, Bloom filter, frontend, rendering or JavaScript execution.
+SQLite live storage, Bloom filter, frontend, rendering or JavaScript execution.
 
 ## Verification — 2026-11-04
 
