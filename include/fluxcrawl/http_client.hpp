@@ -1,7 +1,7 @@
 #pragma once
 
 #include <fluxcrawl/http_response.hpp>
-#include <fluxcrawl/version.hpp>
+#include <fluxcrawl/crawler_identity.hpp>
 
 #include <chrono>
 
@@ -12,7 +12,7 @@ struct HttpClientOptions {
     std::chrono::milliseconds request_timeout{30000};
     long max_redirects = 10;
     std::size_t max_body_bytes = 8 * 1024 * 1024;
-    std::string user_agent = "FluxCrawl/" + std::string{version};
+    std::string user_agent = CrawlerIdentity{}.user_agent;
     bool use_environment_proxy = true;
 };
 

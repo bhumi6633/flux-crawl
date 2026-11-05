@@ -15,6 +15,7 @@ add_library(fluxcrawl_core
     src/url.cpp
     src/html_parser.cpp
     src/crawl_frontier.cpp
+    src/robots_policy.cpp
     src/retry_policy.cpp
     src/host_scheduler.cpp
     src/crawl_state.cpp
