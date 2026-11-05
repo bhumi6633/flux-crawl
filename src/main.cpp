@@ -1,4 +1,5 @@
 #include "benchmark_cli.hpp"
+#include "checkpoint_cli.hpp"
 #include <fluxcrawl/version.hpp>
 #include <fluxcrawl/url.hpp>
 #include <fluxcrawl/sequential_crawler.hpp>
@@ -22,8 +23,12 @@ void print_help()
                  "Sequential, threaded, and event-driven HTTP/HTTPS crawler.\n\n"
                  "Usage:\n"
                  "  fluxcrawl [options] <seed-url>\n"
+                 "  fluxcrawl resume FILE [execution options]\n"
                  "  fluxcrawl benchmark --help\n\n"
                  "Options:\n"
+                 "  --checkpoint FILE      Atomic snapshot output (default: disabled)\n"
+                 "  --checkpoint-every N   Resource attempts between snapshots (default: 100)\n"
+                 "  --stop-after-attempts N Graceful stop at cumulative attempts; requires checkpoint\n"
                  "  --engine NAME   sequential (default), threaded, or async\n"
                  "  --workers N     Threaded workers (default: 4; must be positive)\n"
                  "  --concurrency N Async simultaneous transfers (default: 8; positive)\n"
@@ -48,7 +53,9 @@ void print_help()
 int main(int argc, char* argv[])
 {
     if (argc > 1 && std::string_view{argv[1]} == "benchmark") { return benchmark_main(argc, argv); }
+    if (argc > 1 && std::string_view{argv[1]} == "resume") { return checkpoint_resume_main(argc, argv); }
     bool show_help = false;
+    bool checkpoint_interval_supplied = false;
     bool show_version = false;
     std::string_view seed;
     fluxcrawl::CrawlOptions options;
@@ -66,6 +73,22 @@ int main(int argc, char* argv[])
             show_help = true;
         } else if (argument == "--version") {
             show_version = true;
+        } else if (argument == "--checkpoint") {
+            if (index + 1 >= argc || std::string_view{argv[index + 1]}.empty()) {
+                std::cerr << "fluxcrawl: --checkpoint requires a path.\n"; return 1;
+            }
+            options.checkpoint.path = argv[++index];
+        } else if (argument == "--checkpoint-every" || argument == "--stop-after-attempts") {
+            if (index + 1 >= argc) { std::cerr << "fluxcrawl: missing checkpoint integer.\n"; return 1; }
+            const std::string_view value{argv[++index]};
+            std::size_t n = 0;
+            const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), n);
+            if (value.empty() || error != std::errc{} || end != value.data() + value.size()
+                || (n == 0 && argument == "--checkpoint-every")) {
+                std::cerr << "fluxcrawl: invalid checkpoint integer.\n"; return 1;
+            }
+            if (argument == "--checkpoint-every") { options.checkpoint.every = n; checkpoint_interval_supplied = true; }
+            else { options.checkpoint.stop_after_attempts = n; }
         } else if (argument == "--same-host") {
             options.same_host_only = true;
         } else if (argument == "--respect-robots" || argument == "--ignore-robots") {
@@ -157,6 +180,9 @@ int main(int argc, char* argv[])
         }
     }
 
+    if ((checkpoint_interval_supplied || options.checkpoint.stop_after_attempts) && options.checkpoint.path.empty()) {
+        std::cerr << "fluxcrawl: checkpoint interval/stop requires --checkpoint FILE.\n"; return 1;
+    }
     if (burst_supplied && !options.scheduling.rate) {
         std::cerr << "fluxcrawl: --burst-per-host requires --rate-per-host.\n";
         return 1;
@@ -204,7 +230,7 @@ int main(int argc, char* argv[])
             std::cout
                       << "\nMax depth: " << options.max_depth
                       << "\nMax pages: " << options.max_pages
-                      << "\n\n" << (result.urls_pending == 0 ? "Frontier exhausted" : "Page limit reached")
+                      << "\n\n" << (result.urls_pending == 0 ? "Frontier exhausted" : options.checkpoint.stop_after_attempts && result.pages_attempted >= *options.checkpoint.stop_after_attempts ? "Checkpoint stop reached" : "Page limit reached")
                       << "\nPages attempted: " << result.pages_attempted
                       << "\nResponses: " << result.responses_received
                       << "\nHTML pages processed: " << result.html_pages_processed
@@ -233,7 +259,12 @@ int main(int argc, char* argv[])
                     << "\nTerminal HTTP failures: " << result.terminal_http_failures
                     << "\nTerminal fetch failures: " << result.terminal_fetch_failures << '\n';
             }
-            return result.robots_fetch_failures == 0 && result.terminal_fetch_failures == 0
+            if (!options.checkpoint.path.empty()) {
+                std::cout << "Checkpoints written: " << result.checkpoints_written
+                    << "\nCheckpoint bytes: " << result.checkpoint_bytes
+                    << "\nCheckpoint I/O time ms: " << std::chrono::duration<double, std::milli>(result.checkpoint_time).count() << '\n';
+            }
+            return result.checkpoint_errors.empty() && result.robots_fetch_failures == 0 && result.terminal_fetch_failures == 0
                 && (options.retry.max_retries == 0 || result.terminal_http_failures == 0) ? 0 : 1;
         } catch (const std::exception& error) {
             std::cerr << "fluxcrawl: " << error.what() << '\n';

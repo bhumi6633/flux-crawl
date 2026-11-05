@@ -41,7 +41,7 @@ target_link_libraries(fluxcrawl_core PRIVATE CURL::libcurl LibXml2::LibXml2 Thre
 target_compile_definitions(fluxcrawl_core PRIVATE FLUXCRAWL_BUILD_TYPE="$<CONFIG>")
 fluxcrawl_enable_warnings(fluxcrawl_core)
 
-add_executable(fluxcrawl src/main.cpp src/benchmark_cli.cpp)
+add_executable(fluxcrawl src/main.cpp src/benchmark_cli.cpp src/checkpoint_cli.cpp)
 target_link_libraries(fluxcrawl PRIVATE FluxCrawl::core)
 fluxcrawl_enable_warnings(fluxcrawl)
 
