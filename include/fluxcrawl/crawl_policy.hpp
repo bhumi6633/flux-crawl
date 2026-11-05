@@ -14,6 +14,8 @@ public:
     void schedule(CrawlState& discovery, HostScheduler& scheduler, CrawlResult& result);
     void resolve(const CrawlRecord& bootstrap, std::optional<RobotsPolicy> rules,
                  HostScheduler& scheduler, CrawlResult& result);
+    void accept(HostScheduler::Work work, HostScheduler& scheduler, CrawlResult& result);
+    [[nodiscard]] std::vector<HostScheduler::Work> snapshot() const;
     [[nodiscard]] std::size_t held() const noexcept;
 private:
     struct Entry {
@@ -21,10 +23,9 @@ private:
         RobotsPolicy rules;
         bool deny_all = false;
         bool reusable = false;
-        std::vector<CrawlItem> waiting;
+        std::vector<HostScheduler::Work> waiting;
     };
-    void accept(CrawlItem item, HostScheduler& scheduler, CrawlResult& result);
-    void admit(CrawlItem item, const Entry& entry, HostScheduler& scheduler, CrawlResult& result);
+    void admit(HostScheduler::Work work, const Entry& entry, HostScheduler& scheduler, CrawlResult& result);
     bool enabled_;
     std::unordered_map<HostKey, Entry, HostKeyHash> entries_;
 };

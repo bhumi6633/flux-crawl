@@ -46,6 +46,12 @@ bool CrawlState::discover_from(const CrawlItem& parent, const Url& url)
     return discover(url, parent.depth + 1);
 }
 
+std::vector<Url> CrawlState::seen_urls() const { return {seen_urls_.begin(), seen_urls_.end()}; }
+void CrawlState::restore_seen(const std::vector<Url>& urls)
+{
+    frontier_ = CrawlFrontier{};
+    seen_urls_ = std::unordered_set<Url>{urls.begin(), urls.end()};
+}
 bool CrawlState::has_seen(const Url& url) const
 {
     return seen_urls_.contains(url);

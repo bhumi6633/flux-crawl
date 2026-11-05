@@ -56,6 +56,12 @@ void options(std::ostream& out, const CrawlOptions& o)
         << ' ' << (o.scheduling.rate ? o.scheduling.rate->burst : 0) << '\n';
 }
 }
+CrawlResult CheckpointManager::copy_counters(const CrawlResult& result)
+{
+    CrawlResult copy;
+    for (const auto& [name, member] : fields) { (void)name; copy.*member = result.*member; }
+    return copy;
+}
 bool CheckpointManager::same_semantics(const CrawlOptions& a, const CrawlOptions& b)
 {
     std::ostringstream x, y; x.imbue(std::locale::classic()); y.imbue(std::locale::classic());

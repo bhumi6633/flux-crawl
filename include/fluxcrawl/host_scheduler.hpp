@@ -5,6 +5,7 @@
 #include <list>
 #include <map>
 #include <unordered_map>
+#include <vector>
 
 namespace fluxcrawl {
 
@@ -34,6 +35,7 @@ public:
     explicit TokenBucket(std::optional<RateLimit> limit = std::nullopt);
     [[nodiscard]] Time eligible_at(Time now);
     bool consume(Time now);
+    void start_empty(Time now) { if (limit_) { tokens_ = 0; updated_ = now; } }
 private:
     void refill(Time now);
     std::optional<RateLimit> limit_;
@@ -49,6 +51,11 @@ class HostScheduler {
 public:
     using Time = TokenBucket::Time;
     using Clock = TokenBucket::Clock;
+    struct Work {
+        CrawlItem item;
+        std::optional<Time> eligible_at{};
+        bool was_active = false;
+    };
     class Lease {
     public:
         CrawlItem item;
@@ -60,11 +67,13 @@ public:
         void release() noexcept;
     private:
         friend class HostScheduler;
-        Lease(CrawlItem work, HostScheduler* owner, Host* host);
+        Lease(CrawlItem work, HostScheduler* owner, Host* host, std::uint64_t id);
         HostScheduler* owner_;
         Host* host_;
+        std::uint64_t id_;
     };
-    explicit HostScheduler(std::size_t global_limit, SchedulingOptions options = {});
+    explicit HostScheduler(std::size_t global_limit, SchedulingOptions options = {}, bool track_active = false, bool cold_limits = false);
+    [[nodiscard]] std::vector<Work> snapshot() const;
     HostScheduler(const HostScheduler&) = delete;
     HostScheduler& operator=(const HostScheduler&) = delete;
     void enqueue(CrawlItem item);
@@ -87,7 +96,10 @@ private:
     };
     void promote(Time now);
     bool depth_eligible() const noexcept;
-    void finish(Host& host) noexcept;
+    void finish(Host& host, std::uint64_t id) noexcept;
+    bool track_active_, cold_limits_;
+    std::uint64_t next_id_ = 0;
+    std::map<std::uint64_t, CrawlItem> active_items_;
     SchedulingOptions options_;
     std::size_t infrastructure_pending_ = 0;
     std::size_t global_limit_, pending_ = 0, active_ = 0, active_depth_ = 0;

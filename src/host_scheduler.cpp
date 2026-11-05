@@ -54,8 +54,8 @@ bool TokenBucket::consume(Time now)
     if (limit_) { tokens_ -= 1; }
     return true;
 }
-HostScheduler::HostScheduler(std::size_t global_limit, SchedulingOptions options)
-    : options_{options}, global_limit_{global_limit}
+HostScheduler::HostScheduler(std::size_t global_limit, SchedulingOptions options, bool track_active, bool cold_limits)
+    : track_active_{track_active}, cold_limits_{cold_limits}, options_{options}, global_limit_{global_limit}
 {
     if (global_limit == 0 || (options.max_per_host && *options.max_per_host == 0)) {
         throw std::invalid_argument("Global and per-host concurrency limits must be positive");
@@ -64,7 +64,9 @@ HostScheduler::HostScheduler(std::size_t global_limit, SchedulingOptions options
 }
 void HostScheduler::enqueue(CrawlItem item)
 {
-    auto& host = hosts_.try_emplace(HostKey::from(item.url), options_.rate).first->second;
+    auto [entry, created] = hosts_.try_emplace(HostKey::from(item.url), options_.rate);
+    auto& host = entry->second;
+    if (created && cold_limits_) { host.bucket.start_empty(Clock::now()); }
     const auto depth = item.depth;
     const bool infrastructure = item.policy_request;
     auto [count, unused] = depths_.try_emplace(depth, 0);
@@ -127,7 +129,9 @@ std::optional<HostScheduler::Lease> HostScheduler::acquire(Time now)
         auto queue = host->queues.begin();
         if (queue->first != depth || host->active >= options_.max_per_host.value_or(global_limit_)
             || !host->bucket.consume(now)) { continue; }
-        Lease lease{std::move(queue->second.front()), this, host};
+        const auto id = ++next_id_;
+        if (track_active_) { active_items_.emplace(id, queue->second.front()); }
+        Lease lease{std::move(queue->second.front()), this, host, id};
         queue->second.pop_front();
         if (queue->second.empty()) { host->queues.erase(queue); }
         if (host->queues.empty()) { ready_.pop_back(); }
@@ -155,19 +159,34 @@ std::optional<HostScheduler::Time> HostScheduler::next_deadline(Time now)
     }
     return deadline;
 }
-void HostScheduler::finish(Host& host) noexcept
+std::vector<HostScheduler::Work> HostScheduler::snapshot() const
+{
+    assert(track_active_ || active_ == 0);
+    std::vector<Work> work;
+    for (auto* host : ready_) {
+        for (const auto& [depth, queue] : host->queues) {
+            (void)depth;
+            for (const auto& item : queue) { work.push_back({item}); }
+        }
+    }
+    for (const auto& [time, item] : delayed_) { work.push_back({item, time}); }
+    for (const auto& [id, item] : active_items_) { (void)id; work.push_back({item, std::nullopt, true}); }
+    return work;
+}
+void HostScheduler::finish(Host& host, std::uint64_t id) noexcept
 {
     assert(host.active && active_);
+    active_items_.erase(id);
     --host.active;
     --active_;
 }
-HostScheduler::Lease::Lease(CrawlItem work, HostScheduler* owner, Host* host)
-    : item{std::move(work)}, owner_{owner}, host_{host} {}
+HostScheduler::Lease::Lease(CrawlItem work, HostScheduler* owner, Host* host, std::uint64_t id)
+    : item{std::move(work)}, owner_{owner}, host_{host}, id_{id} {}
 HostScheduler::Lease::Lease(Lease&& other) noexcept
-    : item{std::move(other.item)}, owner_{std::exchange(other.owner_, nullptr)}, host_{other.host_} {}
+    : item{std::move(other.item)}, owner_{std::exchange(other.owner_, nullptr)}, host_{other.host_}, id_{other.id_} {}
 HostScheduler::Lease::~Lease() { release(); }
 void HostScheduler::Lease::release() noexcept
 {
-    if (owner_) { std::exchange(owner_, nullptr)->finish(*host_); }
+    if (owner_) { std::exchange(owner_, nullptr)->finish(*host_, id_); }
 }
 } // namespace fluxcrawl

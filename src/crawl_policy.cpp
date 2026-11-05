@@ -1,27 +1,34 @@
 #include <fluxcrawl/crawl_policy.hpp>
 #include <fluxcrawl/crawler_identity.hpp>
+#include <algorithm>
 
 namespace fluxcrawl {
 void CrawlPolicy::schedule(CrawlState& discovery, HostScheduler& scheduler, CrawlResult& result)
 {
-    while (auto item = discovery.next()) { accept(std::move(*item), scheduler, result); }
+    while (auto item = discovery.next()) { accept({std::move(*item)}, scheduler, result); }
 }
-void CrawlPolicy::accept(CrawlItem item, HostScheduler& scheduler, CrawlResult& result)
+void CrawlPolicy::accept(HostScheduler::Work work, HostScheduler& scheduler, CrawlResult& result)
 {
-    if (!enabled_) { scheduler.enqueue(std::move(item)); return; }
+    if (!enabled_) {
+        if (work.eligible_at) { scheduler.delay(std::move(work.item), *work.eligible_at); }
+        else { scheduler.enqueue(std::move(work.item)); }
+        return;
+    }
+    auto& item = work.item;
     auto [found, inserted] = entries_.try_emplace(HostKey::from(item.url));
     auto& entry = found->second;
     if (!inserted) { ++result.robots_cache_hits; }
-    if (entry.state != State::Fetching) { admit(std::move(item), entry, scheduler, result); return; }
+    if (entry.state != State::Fetching) { admit(std::move(work), entry, scheduler, result); return; }
     if (inserted) {
         const auto robots = Url::resolve(item.url, "/robots.txt").value();
         scheduler.enqueue({robots, item.depth, 0, true});
         ++result.robots_origins;
     }
-    entry.waiting.push_back(std::move(item));
+    entry.waiting.push_back(std::move(work));
 }
-void CrawlPolicy::admit(CrawlItem item, const Entry& entry, HostScheduler& scheduler, CrawlResult& result)
+void CrawlPolicy::admit(HostScheduler::Work work, const Entry& entry, HostScheduler& scheduler, CrawlResult& result)
 {
+    auto& item = work.item;
     const bool bootstrap_url = entry.reusable && item.url.path() == "/robots.txt" && !item.url.has_query();
     if (entry.deny_all || (!bootstrap_url && !entry.rules.allowed(CrawlerIdentity::product_token, item.url))) {
         ++result.urls_blocked_by_robots;
@@ -31,7 +38,8 @@ void CrawlPolicy::admit(CrawlItem item, const Entry& entry, HostScheduler& sched
             // Infrastructure response already obtained; do not manufacture a
             // resource attempt or retain a second copy of its body.
             ++result.robots_resources_reused;
-        } else { scheduler.enqueue(std::move(item)); }
+        } else if (work.eligible_at) { scheduler.delay(std::move(item), *work.eligible_at); }
+        else { scheduler.enqueue(std::move(item)); }
     }
 }
 void CrawlPolicy::resolve(const CrawlRecord& bootstrap, std::optional<RobotsPolicy> rules,
@@ -51,6 +59,18 @@ void CrawlPolicy::resolve(const CrawlRecord& bootstrap, std::optional<RobotsPoli
     }
     for (auto& item : entry.waiting) { admit(std::move(item), entry, scheduler, result); }
     entry.waiting.clear();
+}
+std::vector<HostScheduler::Work> CrawlPolicy::snapshot() const
+{
+    std::vector<HostScheduler::Work> work;
+    for (const auto& [key, entry] : entries_) {
+        (void)key; work.insert(work.end(), entry.waiting.begin(), entry.waiting.end());
+    }
+    std::sort(work.begin(), work.end(), [](const auto& a, const auto& b) {
+        if (a.item.depth != b.item.depth) { return a.item.depth < b.item.depth; }
+        return a.item.url.str() < b.item.url.str();
+    });
+    return work;
 }
 std::size_t CrawlPolicy::held() const noexcept
 {

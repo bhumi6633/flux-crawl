@@ -3,6 +3,7 @@
 #include <fluxcrawl/crawl_frontier.hpp>
 
 #include <unordered_set>
+#include <vector>
 
 namespace fluxcrawl {
 class HostScheduler;
@@ -18,6 +19,8 @@ public:
     // False means duplicate or beyond the inclusive depth limit; state is unchanged.
     [[nodiscard]] bool discover(const Url& url, std::size_t depth);
     [[nodiscard]] bool discover_from(const CrawlItem& parent, const Url& url);
+    [[nodiscard]] std::vector<Url> seen_urls() const;
+    void restore_seen(const std::vector<Url>& urls);
     [[nodiscard]] bool has_seen(const Url& url) const;
     [[nodiscard]] std::size_t frontier_size() const noexcept { return frontier_.size(); }
     [[nodiscard]] std::size_t seen_count() const noexcept { return seen_urls_.size(); }
