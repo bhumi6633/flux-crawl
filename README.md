@@ -283,7 +283,7 @@ Discovered means accepted into crawl state, including the seed; attempted means
 `fetch` was invoked; responded means an `HttpResponse` was returned. Fetch failures
 include all `HttpError` categories, including client limits and invalid metadata.
 HTML processed counts actual extraction calls, excluding depth-boundary pages.
-Each record stores its `CrawlItem` and either response metadata (effective URL,
+Each resource-attempt record stores its `CrawlItem` and either response metadata (effective URL,
 status, content type, decoded bytes) or the original `HttpError`. Bodies are released
 after each iteration, not retained in the result.
 
@@ -294,7 +294,7 @@ mark that final URL separately seen, so it can be fetched again if independently
 discovered. Page limits bound attempts, not the size of the discovered frontier.
 These semantics are the reference behavior shared by all three engines.
 Host concurrency caps, token-bucket rate limiting, and delayed retries are optional.
-Robots.txt and persistence are not implemented.
+Robots policy is optional; persistence is not implemented.
 
 The loopback crawl graph has `/crawl/ -> [a,b,shared,redirect-start]`,
 `a -> [deep,shared]`, `b -> [shared,/crawl/]`, and
@@ -862,3 +862,43 @@ returns CLI success. With retries enabled, terminal HTTP failures also produce a
 nonzero exit status. Baseline benchmarks reject enabled retries.
 
 See [retry architecture, accounting, tests and verification](docs/retries.md).
+
+
+## Robots crawl policy and identity
+
+Robots handling is opt-in with `--respect-robots`; `--ignore-robots` explicitly
+restores the default. This preserves existing crawl and benchmark workloads.
+All engines use the `FluxCrawl` product token and a default HTTP User-Agent built
+from `FluxCrawl/` plus the existing version constant.
+
+```sh
+./build/fluxcrawl --engine async --concurrency 8 --max-per-host 2 \
+  --respect-robots --max-retries 2 --depth 3 --max-pages 100 https://example.com
+```
+
+One policy bootstrap per normalized scheme/host/effective-port origin retrieves
+`/robots.txt`. Normal resources wait for its result while other eligible origins
+continue. Bootstrap attempts use host/global slots and rate tokens and can use
+configured retry/backoff/Retry-After handling. They do not consume graph depth or
+`max_pages`; summaries and `robots_records` account for them separately.
+
+The bounded parser supports `User-agent`, `Allow`, and `Disallow`, comments,
+whitespace and repeated groups. Exact case-insensitive product-token groups take
+precedence over `*`; repeated exact groups combine. Matching uses case-sensitive
+prefixes of path plus query, with percent-encoding normalization. Longest matching
+rule wins, with Allow winning ties; empty Disallow adds no restriction.
+
+This is a **literal prefix subset**, not full RFC/search-engine parity. Pattern
+`*` and `$` characters are literal, not wildcard/end-anchor operators. Sitemap
+discovery and Crawl-delay are unsupported. Policies are fixed for one crawl,
+with no TTL refresh or cross-run cache. Redirect hops still follow the HTTP
+client's policy: robots checks apply to requested crawl items, not every hop.
+
+2xx bodies are parsed with a dedicated 512 KiB decoded-body limit. Missing files
+(404/410) allow crawling; 401/403, other terminal errors, oversized files and
+transport/5xx failures after configured retries conservatively block the origin.
+Blocked URLs remain globally seen, consume no resource attempts, and never retry.
+An explicitly discovered `/robots.txt` can reuse the completed bootstrap without
+another network fetch; this is reported separately from resource attempts.
+
+See [robots architecture, semantics, tests and verification](docs/robots.md).

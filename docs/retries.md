@@ -1,7 +1,8 @@
 # Retry policy and delayed scheduling
 
 Step 12 adds optional retries to all three engines. It adds no scheduling thread,
-retry worker, persistence, robots handling, adaptive throttling or HTTP cache.
+retry worker, persistence, adaptive throttling or HTTP cache. Step 13 composes
+robots bootstrap with the same retry mechanism; see [robots policy](robots.md).
 The clean Step 11 baseline passed 50/50 tests before implementation.
 
 ## Configuration and API
@@ -256,8 +257,9 @@ requests. All traffic stays on loopback.
 
 ## Before robots or persistence
 
-Robots policy must remain separate from retry classification and must account for
-its own fetch attempts explicitly. Persistence needs to store logical discovery
+Robots policy now remains separate from retry classification and accounts for
+its infrastructure attempts explicitly. Robots attempts have separate records and
+counters; CommonProfile outcome decisions include infrastructure evaluations. Persistence needs to store logical discovery
 and attempt state separately, define how cancelled/pending retries resume, and
 convert remaining steady-clock delays into restart-safe data; raw steady-clock
 epoch timestamps cannot be persisted across process restarts. Existing redirect
