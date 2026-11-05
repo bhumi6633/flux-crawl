@@ -66,6 +66,7 @@ void HostScheduler::enqueue(CrawlItem item)
 {
     auto& host = hosts_.try_emplace(HostKey::from(item.url), options_.rate).first->second;
     const auto depth = item.depth;
+    const bool infrastructure = item.policy_request;
     auto [count, unused] = depths_.try_emplace(depth, 0);
     (void)unused;
     const bool new_ready = host.queues.empty();
@@ -82,15 +83,18 @@ void HostScheduler::enqueue(CrawlItem item)
     }
     ++count->second;
     ++pending_;
+    if (infrastructure) { ++infrastructure_pending_; }
 }
 void HostScheduler::delay(CrawlItem item, Time eligible_at)
 {
     const auto depth = item.depth;
+    const bool infrastructure = item.policy_request;
     auto [count, inserted] = depths_.try_emplace(depth, 0);
     try { delayed_.emplace(eligible_at, std::move(item)); }
     catch (...) { if (inserted) { depths_.erase(count); } throw; }
     ++count->second;
     ++pending_;
+    if (infrastructure) { ++infrastructure_pending_; }
 }
 void HostScheduler::promote(Time now)
 {
@@ -100,6 +104,7 @@ void HostScheduler::promote(Time now)
         // Copy first: allocation failure preserves the delayed entry.
         enqueue(entry->second);
         --pending_;
+        if (entry->second.policy_request) { --infrastructure_pending_; }
         --depths_.at(depth);
         delayed_.erase(entry);
     }
@@ -128,6 +133,7 @@ std::optional<HostScheduler::Lease> HostScheduler::acquire(Time now)
         if (host->queues.empty()) { ready_.pop_back(); }
         if (--depths_.begin()->second == 0) { depths_.erase(depths_.begin()); }
         --pending_;
+        if (lease.item.policy_request) { --infrastructure_pending_; }
         ++active_;
         ++host->active;
         active_depth_ = depth;

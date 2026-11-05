@@ -18,6 +18,7 @@ struct CrawlOptions {
     bool profile = false;
     SchedulingOptions scheduling{};
     RetryPolicy retry{};
+    bool respect_robots = false;
 };
 
 struct CrawlResponseMetadata {
@@ -36,6 +37,10 @@ struct CrawlRecord {
 };
 
 struct CrawlResult {
+    std::size_t robots_fetches = 0, robots_origins = 0, robots_cache_hits = 0;
+    std::size_t robots_allowed = 0, urls_blocked_by_robots = 0, robots_fetch_failures = 0;
+    std::size_t robots_retries_scheduled = 0, robots_retries_attempted = 0;
+    std::size_t robots_resources_reused = 0;
     std::size_t pages_attempted = 0;
     std::size_t responses_received = 0;
     // All HttpError results, including transport, body-limit, and metadata failures.

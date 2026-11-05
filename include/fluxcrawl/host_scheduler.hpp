@@ -76,6 +76,7 @@ public:
     // Capacity/depth blocks requiring completion need no timer.
     [[nodiscard]] std::optional<Time> next_deadline(Time now);
     [[nodiscard]] std::size_t pending() const noexcept { return pending_; }
+    [[nodiscard]] std::size_t resource_pending() const noexcept { return pending_ - infrastructure_pending_; }
     [[nodiscard]] std::size_t active() const noexcept { return active_; }
 private:
     struct Host {
@@ -88,6 +89,7 @@ private:
     bool depth_eligible() const noexcept;
     void finish(Host& host) noexcept;
     SchedulingOptions options_;
+    std::size_t infrastructure_pending_ = 0;
     std::size_t global_limit_, pending_ = 0, active_ = 0, active_depth_ = 0;
     std::unordered_map<HostKey, Host, HostKeyHash> hosts_;
     // Hash-node addresses survive rehash; hosts are never erased.
