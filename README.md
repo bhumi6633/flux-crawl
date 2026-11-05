@@ -267,12 +267,12 @@ and processes the fetch result. Only 2xx responses with the exact case-insensiti
 the response is recorded without extracting links. Other statuses, missing types,
 and non-HTML types never produce discoveries. Extraction uses the effective URL
 after redirects. Fetch errors are recorded and the remaining queue continues;
-there are no retries. Malformed HTML uses the existing parser's recovery behavior.
+retries are optional and disabled by default (see below). Malformed HTML uses the existing parser's recovery behavior.
 
 All discoveries go through `CrawlState::discover_from`; no second seen set exists.
 Depth 0 is the seed, and limits are inclusive. Depth barriers preserve BFS;
 within a depth, hosts rotate fairly and each host retains discovery order.
-`max_pages` counts logical fetch attempts, including failures and HTTP errors;
+`max_pages` counts request attempts, including retries, failures and HTTP errors;
 redirect hops are part of the same attempt. Zero pages performs no fetches, leaving
 the seed discovered and pending. The final permitted response is still processed,
 so it can leave discoveries queued when the page budget is exhausted.
@@ -293,7 +293,8 @@ remain separate requested identities: reaching a final URL by redirect does not
 mark that final URL separately seen, so it can be fetched again if independently
 discovered. Page limits bound attempts, not the size of the discovered frontier.
 These semantics are the reference behavior shared by all three engines.
-No robots.txt, rate limiting, or retries are implemented.
+Host concurrency caps, token-bucket rate limiting, and delayed retries are optional.
+Robots.txt and persistence are not implemented.
 
 The loopback crawl graph has `/crawl/ -> [a,b,shared,redirect-start]`,
 `a -> [deep,shared]`, `b -> [shared,/crawl/]`, and
@@ -338,7 +339,7 @@ Publishing performs the canonical seen check, insertion, enqueue, and result
 update under the lock, then decrements active work and notifies all waiters.
 
 Workers recheck eligibility after notifications, spurious wakeups, and the earliest
-token deadline using `condition_variable::wait_until`, which releases the mutex.
+token or retry deadline using `condition_variable::wait_until`, which releases the mutex.
 A worker exits
 normally only when the budget is spent or no queued/active work remains. Temporary
 frontier emptiness never implies termination while another worker can discover
@@ -453,7 +454,7 @@ requires both `active < concurrency` and `attempted < max_pages`. Existing activ
 transfers finish and publish their discoveries after the budget is exhausted.
 Zero pages performs no transfers. An empty frontier with active work keeps waiting;
 termination requires no active transfers and either no pending work or no budget.
-Pending counts include all host queues, including rate-limited work. With no
+Pending counts include host queues, rate-limited work, and delayed retries. With no
 active transfers, the loop sleeps until the next eligibility deadline and resumes.
 `CrawlState` handles canonical deduplication and depth acceptance; `HostScheduler`
 handles claims, fairness, depth barriers, and per-origin eligibility.
@@ -818,3 +819,46 @@ per-hop rate guarantee. `--same-host` remains hostname-only discovery filtering.
 The original benchmark runner requires disabled politeness limits. An optional
 multi-origin scenario records its limits separately. See
 [host scheduling architecture, tests and reproduction](docs/host-scheduling.md).
+
+
+## Retries and delayed work
+
+All engines support optional retries through `CrawlOptions::retry` or the CLI:
+
+```sh
+./build/fluxcrawl --engine async --concurrency 8 --max-retries 2 \
+  --retry-backoff-ms 250 --retry-max-backoff-ms 5000 --retry-jitter \
+  --max-per-host 2 --rate-per-host 10 --max-pages 100 https://example.com
+```
+
+The default `--max-retries 0` preserves previous crawl/benchmark behavior. Two
+retries permit one initial attempt plus two retries. Initial backoff defaults to
+250 ms, exponential multiplier to two, cap to 5000 ms, and full jitter to enabled.
+`--no-retry-jitter` makes delays deterministic. Positive delays and cap >= initial
+are required; the library also rejects nonfinite or less-than-one multipliers.
+
+Retryable HTTP statuses are **429, 500, 502, 503, 504**. Selected curl timeout,
+host-resolution, connection, receive/send, empty-reply and partial-file failures
+also retry. Other HTTP statuses, TLS/configuration failures, body limits, invalid
+metadata, non-HTML content and malformed HTML do not trigger retries.
+
+Retry `n` waits a uniform full-jitter delay from zero through the capped value
+`min(max_backoff, initial_backoff * multiplier^(n-1))`, rounded down to milliseconds.
+Final-response integer-seconds `Retry-After` is a lower bound on that delay and
+may exceed the backoff cap. Malformed/overflow/date-form headers fall back to the
+normal policy; HTTP-date support remains future work.
+
+Retries bypass discovery deduplication and retain original URL/depth, then
+re-enter ordinary host scheduling when due. They must satisfy host/global
+concurrency and token-bucket limits. Other eligible work continues during backoff.
+Existing breadth-first barriers also include delayed retries: deeper work can wait
+for a retry at a shallower depth. Every retry consumes `max_pages`; delayed work
+keeps a crawl alive until it runs or the page budget stops the crawl.
+
+Summaries distinguish scheduled/attempted/exhausted/cancelled retries, recovered
+resources, terminal HTTP/transport failures, and attempt-level responses/errors.
+A recovered transient transport failure remains visible in attempt records but
+returns CLI success. With retries enabled, terminal HTTP failures also produce a
+nonzero exit status. Baseline benchmarks reject enabled retries.
+
+See [retry architecture, accounting, tests and verification](docs/retries.md).

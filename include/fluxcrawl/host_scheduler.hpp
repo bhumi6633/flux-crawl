@@ -71,9 +71,9 @@ public:
     void delay(CrawlItem item, Time eligible_at);
     [[nodiscard]] std::size_t delayed() const noexcept { return delayed_.size(); }
     [[nodiscard]] std::optional<Lease> acquire(Time now);
-    // Only rate deadlines for depth-eligible hosts with free capacity. Other
-    // blocks require completion/publication, not a timer. May return now if a
-    // token became available since the last acquisition attempt.
+    // Minimum delayed-work deadline and applicable host token deadline.
+    // Promotes due retries; may return now if work became eligible since acquire.
+    // Capacity/depth blocks requiring completion need no timer.
     [[nodiscard]] std::optional<Time> next_deadline(Time now);
     [[nodiscard]] std::size_t pending() const noexcept { return pending_; }
     [[nodiscard]] std::size_t active() const noexcept { return active_; }

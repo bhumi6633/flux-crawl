@@ -160,11 +160,11 @@ origin without charging its bucket/cap. No redirect-aware slot migration or
 per-hop politeness guarantee is claimed. Existing redirect, TLS, compression,
 body-limit and timeout policy is unchanged.
 
-No retries are implemented. Before adding them, distinguish attempt budgets from
-URL discovery: an already-seen URL's retry must not be lost to global dedup.
-Delayed retries must contribute to pending/termination state and the earliest
-wake deadline. Every retry should acquire a fresh origin lease/token, release its
-previous lease before backoff, and define budget and cancellation behavior.
+Step 12 adds optional retries without passing them through discovery dedup.
+Delayed retries count as pending and contribute to wake deadlines; due retries
+re-enter ordinary host scheduling with fresh leases and tokens. The previous
+lease releases before any backoff wait. See [retry semantics](retries.md) for
+attempt budgets, cancellation, response classification and timing behavior.
 
 ## Benchmark compatibility and reproduction
 
