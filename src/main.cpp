@@ -6,6 +6,7 @@
 #include <fluxcrawl/async_crawler.hpp>
 
 #include <charconv>
+#include <limits>
 #include <exception>
 #include <cmath>
 #include <sstream>
@@ -30,6 +31,10 @@ void print_help()
                  "  --max-per-host N   Maximum active claims per origin (default: unlimited)\n"
                  "  --rate-per-host R  Positive requests/sec per origin (default: disabled)\n"
                  "  --burst-per-host N Token capacity (default: 1; requires --rate-per-host)\n"
+                 "  --max-retries N  Retries after initial attempt (default: 0, disabled)\n"
+                 "  --retry-backoff-ms N      Initial delay (default: 250, positive)\n"
+                 "  --retry-max-backoff-ms N  Delay cap (default: 5000, >= initial)\n"
+                 "  --retry-jitter / --no-retry-jitter  Full jitter (default: enabled)\n"
                  "  --depth N       Maximum crawl depth (default: 2)\n"
                  "  --max-pages N   Maximum fetch attempts (default: 100)\n"
                  "  --same-host     Accept discoveries matching the seed host\n"
@@ -62,6 +67,25 @@ int main(int argc, char* argv[])
             show_version = true;
         } else if (argument == "--same-host") {
             options.same_host_only = true;
+        } else if (argument == "--retry-jitter" || argument == "--no-retry-jitter") {
+            options.retry.jitter = argument == "--retry-jitter";
+        } else if (argument == "--max-retries" || argument == "--retry-backoff-ms" || argument == "--retry-max-backoff-ms") {
+            if (index + 1 >= argc) {
+                std::cerr << "fluxcrawl: " << argument << " requires an integer.\n";
+                return 1;
+            }
+            const std::string_view value{argv[++index]};
+            std::size_t number = 0;
+            const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), number);
+            if (value.empty() || error != std::errc{} || end != value.data() + value.size()
+                || (argument != "--max-retries" && (number == 0
+                    || number > static_cast<std::size_t>(std::numeric_limits<std::chrono::milliseconds::rep>::max())))) {
+                std::cerr << "fluxcrawl: invalid integer for " << argument << ".\n";
+                return 1;
+            }
+            if (argument == "--max-retries") { options.retry.max_retries = number; }
+            else if (argument == "--retry-backoff-ms") { options.retry.initial_backoff = std::chrono::milliseconds{number}; }
+            else { options.retry.max_backoff = std::chrono::milliseconds{number}; }
         } else if (argument == "--rate-per-host") {
             if (index + 1 >= argc) {
                 std::cerr << "fluxcrawl: --rate-per-host requires a finite positive number.\n";
@@ -184,7 +208,19 @@ int main(int argc, char* argv[])
                       << "\nFetch failures: " << result.fetch_failures
                       << "\nURLs discovered: " << result.urls_discovered
                       << "\nURLs pending: " << result.urls_pending << '\n';
-            return result.fetch_failures == 0 ? 0 : 1;
+            if (options.retry.max_retries != 0) {
+                std::cout << "Retries scheduled: " << result.retries_scheduled
+                    << "\nRetries attempted: " << result.retries_attempted
+                    << "\nRecovered after retry: " << result.responses_recovered_after_retry
+                    << "\nRetries exhausted: " << result.retries_exhausted
+                    << "\nRetry-After used: " << result.retry_after_used
+                    << "\nRetries cancelled by page limit: " << result.retries_cancelled
+                    << "\nResources completed: " << result.resources_completed
+                    << "\nTerminal HTTP failures: " << result.terminal_http_failures
+                    << "\nTerminal fetch failures: " << result.terminal_fetch_failures << '\n';
+            }
+            return result.terminal_fetch_failures == 0
+                && (options.retry.max_retries == 0 || result.terminal_http_failures == 0) ? 0 : 1;
         } catch (const std::exception& error) {
             std::cerr << "fluxcrawl: " << error.what() << '\n';
             return 1;

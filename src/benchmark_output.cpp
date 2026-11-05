@@ -58,6 +58,8 @@ void profile_table(std::ostream& out, const ProfileSummary& profile)
         << " discovery=" << milliseconds(common.discovery) << " frontier=" << milliseconds(common.frontier)
         << " extractions=" << common.extractions << " considered=" << common.links_considered
         << " accepted=" << common.links_accepted << '\n';
+    out << "  Retry decisions=" << common.retry_decisions
+        << " scheduled delay_ms=" << milliseconds(common.retry_delay) << '\n';
     if (profile.threaded) {
         const auto& threaded = *profile.threaded;
         const auto& total = threaded.total;
