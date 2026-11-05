@@ -74,19 +74,22 @@ CheckpointRuntime::Report CheckpointRuntime::write(const CrawlCheckpoint& snapsh
 {
     std::lock_guard lock{writer_};
     if (snapshot.sequence <= last_written_) { return {}; }
+    const auto started = HostScheduler::Clock::now();
     try {
         Report report;
         if (!options_.checkpoint.path.empty()) { report.bytes = CheckpointManager::write(options_.checkpoint.path, snapshot); }
         if (options_.checkpoint.on_snapshot) { options_.checkpoint.on_snapshot(snapshot); }
         last_written_ = snapshot.sequence;
+        report.elapsed = HostScheduler::Clock::now() - started;
         return report;
     } catch (const std::exception& error) {
         std::cerr << "Checkpoint failed: " << error.what() << '\n';
-        return {0, error.what()};
+        return {0, error.what(), HostScheduler::Clock::now() - started};
     }
 }
 void CheckpointRuntime::report(CrawlResult& result, Report report)
 {
+    result.checkpoint_time += report.elapsed;
     if (!report.error.empty()) { result.checkpoint_errors.push_back(std::move(report.error)); }
     else if (report.bytes != 0) { ++result.checkpoints_written; result.checkpoint_bytes = report.bytes; }
 }

@@ -46,10 +46,6 @@ void publish_page(CrawlState& state, CrawlResult& result, ProcessedPage page,
                   const Url& seed, const CrawlOptions& options, HostScheduler& scheduler, CrawlPolicy& policy, CommonProfile* profile)
 {
     const bool bootstrap = page.record.item.policy_request;
-    if (page.record.item.retry_count != 0) {
-        if (bootstrap) { ++result.robots_retries_attempted; }
-        else { ++result.retries_attempted; }
-    }
     const auto* response = std::get_if<CrawlResponseMetadata>(&page.record.outcome);
     const auto* error = std::get_if<HttpError>(&page.record.outcome);
     const bool transient = response ? retryable_status(response->status_code) : retryable_error(*error);
@@ -75,6 +71,7 @@ void publish_page(CrawlState& state, CrawlResult& result, ProcessedPage page,
         }
         auto retry = page.record.item;
         ++retry.retry_count;
+        retry.recovery = false;
         scheduler.delay(std::move(retry), deadline);
         if (bootstrap) { ++result.robots_retries_scheduled; }
         else { ++result.retries_scheduled; }

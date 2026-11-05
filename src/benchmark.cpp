@@ -111,6 +111,10 @@ std::vector<BenchmarkAggregate> aggregate_samples(std::span<const BenchmarkSampl
 
 BenchmarkReport BenchmarkRunner::run(const BenchmarkConfig& config) const
 {
+    if (!config.crawl.checkpoint.path.empty() || config.crawl.checkpoint.on_snapshot
+        || config.crawl.checkpoint.stop_after_attempts || config.crawl.resume_from) {
+        throw std::invalid_argument("Baseline benchmarks require checkpointing/resume disabled");
+    }
     if (config.crawl.respect_robots) {
         throw std::invalid_argument("Baseline benchmarks require robots policy disabled");
     }

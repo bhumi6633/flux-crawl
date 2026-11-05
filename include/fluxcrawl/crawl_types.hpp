@@ -46,6 +46,7 @@ struct CrawlResult {
     std::size_t robots_resources_reused = 0, robots_retries_cancelled = 0;
     std::size_t recovery_attempts = 0, recovery_retry_attempts = 0;
     std::size_t attempts_unresolved = 0, robots_attempts_unresolved = 0;
+    std::chrono::nanoseconds checkpoint_time{};
     std::size_t checkpoints_written = 0, checkpoint_bytes = 0;
     std::vector<std::string> checkpoint_errors; // Session diagnostics, not persisted.
     std::size_t pages_attempted = 0;

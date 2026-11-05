@@ -1,6 +1,7 @@
 #include <fluxcrawl/async_crawler.hpp>
 #include "crawl_processing.hpp"
 #include "profile_timer.hpp"
+#include "checkpoint_runtime.hpp"
 #include <algorithm>
 #include "curl_transfer.hpp"
 
@@ -99,10 +100,11 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
     options.retry.validate();
     const auto started = std::chrono::steady_clock::now();
     CrawlState state{seed, options.max_depth};
-    HostScheduler scheduler{concurrency_, options.scheduling};
+    HostScheduler scheduler{concurrency_, options.scheduling, detail::checkpointing(options), bool(options.resume_from)};
     CrawlPolicy policy{options.respect_robots};
     CrawlResult result;
-    policy.schedule(state, scheduler, result);
+    detail::CheckpointRuntime checkpoints{seed, options, http_options_};
+    detail::restore_session(seed, options, http_options_, state, scheduler, policy, result);
     if (options.profile) { result.profile.emplace(); result.profile->async.emplace(); }
     auto* common = result.profile ? &result.profile->common : nullptr;
     auto* profile = result.profile ? &*result.profile->async : nullptr;
@@ -113,17 +115,21 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
             detail::process_response(std::move(response), std::move(item), options, latency, common), seed, options, scheduler, policy, common);
         policy.schedule(state, scheduler, result);
     };
+    const auto checkpoint = [&](bool final = false) {
+        if (auto snapshot = checkpoints.capture(state, scheduler, policy, result, final)) {
+            detail::CheckpointRuntime::report(result, checkpoints.write(*snapshot));
+        }
+    };
     const auto fill = [&] {
         detail::ProfileTimer timer{profile ? &profile->refill_time : nullptr};
         bool added = false;
-        while (transfers.active.size() < concurrency_ && result.pages_attempted < options.max_pages) {
+        while (transfers.active.size() < concurrency_ && result.pages_attempted < options.max_pages && !checkpoints.stop(result)) {
             auto item = [&] {
                 detail::ProfileTimer frontier{common ? &common->frontier : nullptr};
                 return scheduler.acquire(HostScheduler::Clock::now());
             }();
             if (!item) { break; }
-            if (item->item.policy_request) { ++result.robots_fetches; }
-            else { ++result.pages_attempted; }
+            detail::reserve_attempt(result, item->item);
             const auto setup_started = std::chrono::steady_clock::now();
             auto transfer = std::make_unique<ActiveTransfer>(std::move(*item), http_options_);
             if (transfer->request.setup != CURLE_OK) {
@@ -142,12 +148,14 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
     };
 
     (void)fill();
-    while (!transfers.active.empty() || (scheduler.pending() != 0 && result.pages_attempted < options.max_pages)) {
+    checkpoint();
+    while (!transfers.active.empty() || (scheduler.pending() != 0 && result.pages_attempted < options.max_pages && !checkpoints.stop(result))) {
         if (transfers.active.empty()) {
             if (const auto deadline = scheduler.next_deadline(HostScheduler::Clock::now())) {
                 std::this_thread::sleep_until(*deadline);
             }
             (void)fill();
+            checkpoint();
             if (transfers.active.empty()) { continue; }
         }
         if (profile) { ++profile->iterations; }
@@ -168,7 +176,9 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
         }
         // Refill after draining completions, before waiting on any remaining siblings.
         // Preserve BFS depth barriers, but never wait for a whole same-depth batch.
-        if (fill()) { continue; } // New handles need perform before the next poll.
+        const auto added = fill();
+        checkpoint();
+        if (added) { continue; } // New handles need perform before the next poll.
         if (!transfers.active.empty()) {
             // poll honors shorter internal curl timers and sleeps even with no descriptors.
             detail::ProfileTimer timer{profile ? &profile->multi_wait : nullptr};
@@ -186,9 +196,10 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
     }
     transfers.close();
     result.robots_retries_cancelled = result.robots_retries_scheduled - result.robots_retries_attempted;
-    result.retries_cancelled = result.retries_scheduled - result.retries_attempted;
+    result.retries_cancelled = result.retries_scheduled + result.recovery_retry_attempts - result.retries_attempted;
     result.urls_discovered = state.seen_count();
     result.urls_pending = scheduler.resource_pending() + policy.held();
+    checkpoint(true);
     result.elapsed = std::chrono::steady_clock::now() - started;
     return result;
 }

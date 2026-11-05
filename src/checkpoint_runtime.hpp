@@ -2,6 +2,7 @@
 #include <fluxcrawl/checkpoint.hpp>
 #include <fluxcrawl/crawl_policy.hpp>
 #include <mutex>
+#include <stdexcept>
 
 namespace fluxcrawl::detail {
 inline bool checkpointing(const CrawlOptions& options)
@@ -11,10 +12,12 @@ void restore_session(const Url& seed, const CrawlOptions& options, const HttpCli
                      CrawlState& state, HostScheduler& scheduler, CrawlPolicy& policy, CrawlResult& result);
 class CheckpointRuntime {
 public:
-    struct Report { std::size_t bytes = 0; std::string error; };
+    struct Report { std::size_t bytes = 0; std::string error; std::chrono::nanoseconds elapsed{}; };
     CheckpointRuntime(const Url& seed, const CrawlOptions& options, const HttpClientOptions& http)
         : seed_{seed}, options_{options}, http_{http}, sequence_{options.resume_from ? options.resume_from->sequence : 0},
-          last_attempts_{options.resume_from ? options.resume_from->counters.pages_attempted : 0} {}
+          last_attempts_{options.resume_from ? options.resume_from->counters.pages_attempted : 0} {
+        if (checkpointing(options) && options.checkpoint.every == 0) { throw std::invalid_argument("Checkpoint interval must be positive"); }
+    }
     bool stop(const CrawlResult& result) const {
         return options_.checkpoint.stop_after_attempts && result.pages_attempted >= *options_.checkpoint.stop_after_attempts;
     }

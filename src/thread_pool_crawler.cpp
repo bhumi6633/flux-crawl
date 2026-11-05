@@ -3,6 +3,7 @@
 
 #include "crawl_processing.hpp"
 #include "profile_timer.hpp"
+#include "checkpoint_runtime.hpp"
 #include <algorithm>
 
 #include <condition_variable>
@@ -17,21 +18,31 @@ namespace {
 
 class Coordinator {
 public:
-    Coordinator(const Url& seed, const CrawlOptions& options, std::size_t workers)
-        : seed_{seed}, options_{options}, state_{seed, options.max_depth}, scheduler_{workers, options.scheduling}, policy_{options.respect_robots}
-    { policy_.schedule(state_, scheduler_, result_); }
+    Coordinator(const Url& seed, const CrawlOptions& options, std::size_t workers, const HttpClientOptions& http)
+        : seed_{seed}, options_{options}, state_{seed, options.max_depth}, scheduler_{workers, options.scheduling, detail::checkpointing(options), bool(options.resume_from)}, policy_{options.respect_robots}, checkpoints_{seed, options, http}
+    { detail::restore_session(seed, options, http, state_, scheduler_, policy_, result_); }
 
     std::optional<HostScheduler::Lease> acquire(WorkerProfile* profile)
     {
         auto lock = acquire_lock(profile);
         for (;;) {
-            if (fatal_ || result_.pages_attempted == options_.max_pages) { return std::nullopt; }
+            if (fatal_ || result_.pages_attempted == options_.max_pages || checkpoints_.stop(result_)) { return std::nullopt; }
             {
-                detail::ProfileTimer timer{profile ? &profile->common.frontier : nullptr};
-                if (auto claim = scheduler_.acquire(HostScheduler::Clock::now())) {
-                    if (claim->item.policy_request) { ++result_.robots_fetches; }
-                    else { ++result_.pages_attempted; }
+                auto claim = [&] {
+                    detail::ProfileTimer timer{profile ? &profile->common.frontier : nullptr};
+                    return scheduler_.acquire(HostScheduler::Clock::now());
+                }();
+                if (claim) {
+                    detail::reserve_attempt(result_, claim->item);
                     if (profile) { max_active_ = std::max(max_active_, scheduler_.active()); }
+                    if (auto snapshot = checkpoints_.capture(state_, scheduler_, policy_, result_)) {
+                        lock.unlock();
+                        detail::CheckpointRuntime::Report report;
+                        try { report = checkpoints_.write(*snapshot); }
+                        catch (...) { lock.lock(); throw; }
+                        lock.lock();
+                        detail::CheckpointRuntime::report(result_, std::move(report));
+                    }
                     return claim;
                 }
             }
@@ -79,9 +90,12 @@ public:
         // Called only after all workers have joined.
         if (fatal_) { std::rethrow_exception(fatal_); }
         result_.robots_retries_cancelled = result_.robots_retries_scheduled - result_.robots_retries_attempted;
-        result_.retries_cancelled = result_.retries_scheduled - result_.retries_attempted;
+        result_.retries_cancelled = result_.retries_scheduled + result_.recovery_retry_attempts - result_.retries_attempted;
         result_.urls_discovered = state_.seen_count();
         result_.urls_pending = scheduler_.resource_pending() + policy_.held();
+        if (auto snapshot = checkpoints_.capture(state_, scheduler_, policy_, result_, true)) {
+            detail::CheckpointRuntime::report(result_, checkpoints_.write(*snapshot));
+        }
         return std::move(result_);
     }
 
@@ -102,6 +116,7 @@ private:
     CrawlState state_;
     HostScheduler scheduler_;
     CrawlPolicy policy_;
+    detail::CheckpointRuntime checkpoints_;
     CrawlResult result_;
     std::mutex mutex_;
     std::condition_variable changed_;
@@ -124,7 +139,7 @@ CrawlResult ThreadPoolCrawler::crawl(const Url& seed, const CrawlOptions& option
     // Initialize libxml2 on the calling thread. HttpClient already initialized curl.
     const HtmlLinkExtractor initialized_parser;
     (void)initialized_parser;
-    Coordinator coordinator{seed, options, workers_};
+    Coordinator coordinator{seed, options, workers_, client_.options()};
     std::optional<ThreadProfile> profile;
     if (options.profile) { profile.emplace(); }
     if (options.max_pages == 0) {
