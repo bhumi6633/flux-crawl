@@ -40,7 +40,7 @@ struct CrawlResult {
     std::size_t robots_fetches = 0, robots_origins = 0, robots_cache_hits = 0;
     std::size_t robots_allowed = 0, urls_blocked_by_robots = 0, robots_fetch_failures = 0;
     std::size_t robots_retries_scheduled = 0, robots_retries_attempted = 0;
-    std::size_t robots_resources_reused = 0;
+    std::size_t robots_resources_reused = 0, robots_retries_cancelled = 0;
     std::size_t pages_attempted = 0;
     std::size_t responses_received = 0;
     // All HttpError results, including transport, body-limit, and metadata failures.
@@ -56,6 +56,7 @@ struct CrawlResult {
     // Sum of decoded body bytes in HttpResponse outcomes; excludes partial failed bodies.
     std::size_t bytes_downloaded = 0;
     std::optional<ProfileSummary> profile{};
+    std::vector<CrawlRecord> robots_records; // Infrastructure attempts, no bodies or HTML discovery.
     std::vector<CrawlRecord> records; // Sequential attempt order or concurrent publication order; no bodies.
 };
 

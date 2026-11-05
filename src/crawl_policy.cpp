@@ -22,11 +22,12 @@ void CrawlPolicy::accept(CrawlItem item, HostScheduler& scheduler, CrawlResult& 
 }
 void CrawlPolicy::admit(CrawlItem item, const Entry& entry, HostScheduler& scheduler, CrawlResult& result)
 {
-    if (entry.deny_all || !entry.rules.allowed(CrawlerIdentity::product_token, item.url)) {
+    const bool bootstrap_url = entry.reusable && item.url.path() == "/robots.txt" && !item.url.has_query();
+    if (entry.deny_all || (!bootstrap_url && !entry.rules.allowed(CrawlerIdentity::product_token, item.url))) {
         ++result.urls_blocked_by_robots;
     } else {
         ++result.robots_allowed;
-        if (entry.reusable && item.url.path() == "/robots.txt" && !item.url.has_query()) {
+        if (bootstrap_url) {
             // Infrastructure response already obtained; do not manufacture a
             // resource attempt or retain a second copy of its body.
             ++result.robots_resources_reused;

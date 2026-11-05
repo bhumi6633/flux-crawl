@@ -21,6 +21,7 @@ public:
     // Invalid options or global initialization failure throw at construction.
     explicit HttpClient(HttpClientOptions options = {});
     [[nodiscard]] HttpResult fetch(const Url& url) const;
+    [[nodiscard]] HttpResult fetch(const Url& url, std::size_t body_limit) const;
 
 private:
     HttpClientOptions options_;

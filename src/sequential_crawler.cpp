@@ -18,8 +18,9 @@ CrawlResult SequentialCrawler::crawl(const Url& seed, const CrawlOptions& option
     const auto started = std::chrono::steady_clock::now();
     CrawlState state{seed, options.max_depth};
     HostScheduler scheduler{1, options.scheduling};
-    state.schedule_pending(scheduler);
+    CrawlPolicy policy{options.respect_robots};
     CrawlResult result;
+    policy.schedule(state, scheduler, result);
     if (options.profile) { result.profile.emplace(); }
     auto* profile = result.profile ? &result.profile->common : nullptr;
     while (scheduler.pending() != 0 && result.pages_attempted < options.max_pages) {
@@ -34,13 +35,15 @@ CrawlResult SequentialCrawler::crawl(const Url& seed, const CrawlOptions& option
             }
             throw std::logic_error("Pending sequential work has no scheduling deadline");
         }
-        ++result.pages_attempted;
-        detail::publish_page(state, result, detail::process_page(client_, std::move(item->item), options, profile), seed, options, scheduler, profile);
-        state.schedule_pending(scheduler);
+        if (item->item.policy_request) { ++result.robots_fetches; }
+        else { ++result.pages_attempted; }
+        detail::publish_page(state, result, detail::process_page(client_, std::move(item->item), options, profile), seed, options, scheduler, policy, profile);
+        policy.schedule(state, scheduler, result);
     }
+    result.robots_retries_cancelled = result.robots_retries_scheduled - result.robots_retries_attempted;
     result.retries_cancelled = result.retries_scheduled - result.retries_attempted;
     result.urls_discovered = state.seen_count();
-    result.urls_pending = scheduler.pending();
+    result.urls_pending = scheduler.resource_pending() + policy.held();
     result.elapsed = std::chrono::steady_clock::now() - started;
     return result;
 }

@@ -28,6 +28,7 @@ CrawlResult crawl(EngineType engine, std::size_t concurrency, const BenchmarkCon
     const auto http = detail::benchmark_http_options();
     auto options = config.crawl;
     options.same_host_only = true;
+    options.respect_robots = false;
     switch (engine) {
     case EngineType::Sequential: return SequentialCrawler{http}.crawl(config.seed, options);
     case EngineType::Threaded: return ThreadPoolCrawler{concurrency, http}.crawl(config.seed, options);
@@ -110,6 +111,9 @@ std::vector<BenchmarkAggregate> aggregate_samples(std::span<const BenchmarkSampl
 
 BenchmarkReport BenchmarkRunner::run(const BenchmarkConfig& config) const
 {
+    if (config.crawl.respect_robots) {
+        throw std::invalid_argument("Baseline benchmarks require robots policy disabled");
+    }
     if (config.crawl.retry.max_retries != 0) {
         throw std::invalid_argument("Baseline benchmarks require disabled retries");
     }

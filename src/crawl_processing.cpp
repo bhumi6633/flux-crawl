@@ -11,7 +11,7 @@ namespace fluxcrawl::detail {
 ProcessedPage process_page(const HttpClient& client, CrawlItem item, const CrawlOptions& options, CommonProfile* profile)
 {
     const auto started = std::chrono::steady_clock::now();
-    auto fetched = client.fetch(item.url);
+    auto fetched = item.policy_request ? client.fetch(item.url, RobotsPolicy::max_bytes) : client.fetch(item.url);
     const auto latency = std::chrono::steady_clock::now() - started;
     return process_response(std::move(fetched), std::move(item), options, latency, profile);
 }
@@ -23,6 +23,12 @@ ProcessedPage process_response(HttpResult fetched, CrawlItem item, const CrawlOp
         return {{std::move(item), std::move(*error), latency}, {}, false};
     }
     auto& response = std::get<HttpResponse>(fetched);
+    if (item.policy_request) {
+        std::optional<RobotsPolicy> rules;
+        if (response.status_code >= 200 && response.status_code < 300) { rules = RobotsPolicy::parse(response.body); }
+        return {{std::move(item), CrawlResponseMetadata{std::move(response.effective_url), response.status_code,
+                 std::move(response.content_type), response.downloaded_bytes, response.retry_after}, latency}, {}, false, std::move(rules)};
+    }
     const bool parse = response.status_code >= 200 && response.status_code < 300
         && is_html_content_type(response.content_type) && item.depth < options.max_depth;
     std::vector<Url> links;
@@ -37,9 +43,13 @@ ProcessedPage process_response(HttpResult fetched, CrawlItem item, const CrawlOp
 }
 
 void publish_page(CrawlState& state, CrawlResult& result, ProcessedPage page,
-                  const Url& seed, const CrawlOptions& options, HostScheduler& scheduler, CommonProfile* profile)
+                  const Url& seed, const CrawlOptions& options, HostScheduler& scheduler, CrawlPolicy& policy, CommonProfile* profile)
 {
-    if (page.record.item.retry_count != 0) { ++result.retries_attempted; }
+    const bool bootstrap = page.record.item.policy_request;
+    if (page.record.item.retry_count != 0) {
+        if (bootstrap) { ++result.robots_retries_attempted; }
+        else { ++result.retries_attempted; }
+    }
     const auto* response = std::get_if<CrawlResponseMetadata>(&page.record.outcome);
     const auto* error = std::get_if<HttpError>(&page.record.outcome);
     const bool transient = response ? retryable_status(response->status_code) : retryable_error(*error);
@@ -61,16 +71,19 @@ void publish_page(CrawlState& state, CrawlResult& result, ProcessedPage page,
             const auto server = std::chrono::duration<long double>(*response->retry_after) >= std::chrono::duration<long double>(room)
                 ? HostScheduler::Time::max() : now + std::chrono::duration_cast<HostScheduler::Clock::duration>(*response->retry_after);
             deadline = std::max(deadline, server);
-            ++result.retry_after_used;
+            if (!bootstrap) { ++result.retry_after_used; }
         }
         auto retry = page.record.item;
         ++retry.retry_count;
         scheduler.delay(std::move(retry), deadline);
-        ++result.retries_scheduled;
+        if (bootstrap) { ++result.robots_retries_scheduled; }
+        else { ++result.retries_scheduled; }
         if (profile) {
             const auto delay = std::chrono::duration_cast<ProfileDuration>(deadline - now);
             profile->retry_delay += std::min(delay, ProfileDuration::max() - profile->retry_delay);
         }
+    } else if (bootstrap) {
+        policy.resolve(page.record, std::move(page.robots_rules), scheduler, result);
     } else {
         ++result.resources_completed;
         if (transient && options.retry.max_retries != 0) { ++result.retries_exhausted; }
@@ -79,6 +92,10 @@ void publish_page(CrawlState& state, CrawlResult& result, ProcessedPage page,
         if (count != 0 && response && response->status_code >= 200 && response->status_code < 300) {
             ++result.responses_recovered_after_retry;
         }
+    }
+    if (bootstrap) {
+        result.robots_records.push_back(std::move(page.record));
+        return; // Infrastructure has no normal attempt/HTML record.
     }
     if (std::holds_alternative<HttpError>(page.record.outcome)) {
         ++result.fetch_failures;

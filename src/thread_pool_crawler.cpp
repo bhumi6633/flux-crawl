@@ -18,8 +18,8 @@ namespace {
 class Coordinator {
 public:
     Coordinator(const Url& seed, const CrawlOptions& options, std::size_t workers)
-        : seed_{seed}, options_{options}, state_{seed, options.max_depth}, scheduler_{workers, options.scheduling}
-    { state_.schedule_pending(scheduler_); }
+        : seed_{seed}, options_{options}, state_{seed, options.max_depth}, scheduler_{workers, options.scheduling}, policy_{options.respect_robots}
+    { policy_.schedule(state_, scheduler_, result_); }
 
     std::optional<HostScheduler::Lease> acquire(WorkerProfile* profile)
     {
@@ -29,7 +29,8 @@ public:
             {
                 detail::ProfileTimer timer{profile ? &profile->common.frontier : nullptr};
                 if (auto claim = scheduler_.acquire(HostScheduler::Clock::now())) {
-                    ++result_.pages_attempted;
+                    if (claim->item.policy_request) { ++result_.robots_fetches; }
+                    else { ++result_.pages_attempted; }
                     if (profile) { max_active_ = std::max(max_active_, scheduler_.active()); }
                     return claim;
                 }
@@ -52,8 +53,8 @@ public:
             detail::ProfileTimer timer{profile ? &profile->common.frontier : nullptr};
             if (!fatal_) {
                 // The seen check, insertion, enqueue, and result update share this lock.
-                detail::publish_page(state_, result_, std::move(page), seed_, options_, scheduler_, profile ? &profile->common : nullptr);
-                state_.schedule_pending(scheduler_);
+                detail::publish_page(state_, result_, std::move(page), seed_, options_, scheduler_, policy_, profile ? &profile->common : nullptr);
+                policy_.schedule(state_, scheduler_, result_);
             }
             claim.release();
         }
@@ -77,9 +78,10 @@ public:
     {
         // Called only after all workers have joined.
         if (fatal_) { std::rethrow_exception(fatal_); }
+        result_.robots_retries_cancelled = result_.robots_retries_scheduled - result_.robots_retries_attempted;
         result_.retries_cancelled = result_.retries_scheduled - result_.retries_attempted;
         result_.urls_discovered = state_.seen_count();
-        result_.urls_pending = scheduler_.pending();
+        result_.urls_pending = scheduler_.resource_pending() + policy_.held();
         return std::move(result_);
     }
 
@@ -99,6 +101,7 @@ private:
     const CrawlOptions& options_;
     CrawlState state_;
     HostScheduler scheduler_;
+    CrawlPolicy policy_;
     CrawlResult result_;
     std::mutex mutex_;
     std::condition_variable changed_;

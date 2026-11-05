@@ -22,7 +22,11 @@ void check_multi(CURLMcode code)
 
 struct ActiveTransfer {
     ActiveTransfer(HostScheduler::Lease pending, const HttpClientOptions& options)
-        : claim{std::move(pending)}, request{claim.item.url, options} {}
+        : claim{std::move(pending)}, request{claim.item.url, [&] {
+            auto configured = options;
+            if (claim.item.policy_request) { configured.max_body_bytes = RobotsPolicy::max_bytes; }
+            return configured;
+        }()} {}
     HostScheduler::Lease claim;
     detail::CurlTransfer request;
     std::chrono::steady_clock::time_point started;
@@ -96,8 +100,9 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
     const auto started = std::chrono::steady_clock::now();
     CrawlState state{seed, options.max_depth};
     HostScheduler scheduler{concurrency_, options.scheduling};
-    state.schedule_pending(scheduler);
+    CrawlPolicy policy{options.respect_robots};
     CrawlResult result;
+    policy.schedule(state, scheduler, result);
     if (options.profile) { result.profile.emplace(); result.profile->async.emplace(); }
     auto* common = result.profile ? &result.profile->common : nullptr;
     auto* profile = result.profile ? &*result.profile->async : nullptr;
@@ -105,8 +110,8 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
 
     const auto publish = [&](HttpResult response, CrawlItem item, std::chrono::nanoseconds latency) {
         detail::publish_page(state, result,
-            detail::process_response(std::move(response), std::move(item), options, latency, common), seed, options, scheduler, common);
-        state.schedule_pending(scheduler);
+            detail::process_response(std::move(response), std::move(item), options, latency, common), seed, options, scheduler, policy, common);
+        policy.schedule(state, scheduler, result);
     };
     const auto fill = [&] {
         detail::ProfileTimer timer{profile ? &profile->refill_time : nullptr};
@@ -117,7 +122,8 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
                 return scheduler.acquire(HostScheduler::Clock::now());
             }();
             if (!item) { break; }
-            ++result.pages_attempted;
+            if (item->item.policy_request) { ++result.robots_fetches; }
+            else { ++result.pages_attempted; }
             const auto setup_started = std::chrono::steady_clock::now();
             auto transfer = std::make_unique<ActiveTransfer>(std::move(*item), http_options_);
             if (transfer->request.setup != CURLE_OK) {
@@ -179,9 +185,10 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
         }
     }
     transfers.close();
+    result.robots_retries_cancelled = result.robots_retries_scheduled - result.robots_retries_attempted;
     result.retries_cancelled = result.retries_scheduled - result.retries_attempted;
     result.urls_discovered = state.seen_count();
-    result.urls_pending = scheduler.pending();
+    result.urls_pending = scheduler.resource_pending() + policy.held();
     result.elapsed = std::chrono::steady_clock::now() - started;
     return result;
 }
