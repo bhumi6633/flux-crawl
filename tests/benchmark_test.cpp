@@ -14,6 +14,14 @@ int main(int argc, char* argv[])
 {
     int failures = 0;
     const auto check = [&](bool ok, const char* label) { if (!ok) { ++failures; std::cerr << label << '\n'; } };
+    {
+        fluxcrawl::BenchmarkConfig retrying{fluxcrawl::Url::parse("http://127.0.0.1:1/page/0").value()};
+        retrying.crawl.retry.max_retries = 1;
+        bool rejected = false;
+        try { (void)fluxcrawl::BenchmarkRunner{}.run(retrying); }
+        catch (const std::invalid_argument&) { rejected = true; }
+        check(rejected, "baseline benchmark rejects retries before contacting fixture");
+    }
     for (bool rate : {false, true}) {
         fluxcrawl::BenchmarkConfig limited{fluxcrawl::Url::parse("http://127.0.0.1:1/page/0").value()};
         if (rate) { limited.crawl.scheduling.rate = fluxcrawl::RateLimit{1, 1}; }

@@ -57,6 +57,44 @@ class MultiOrigin(AbstractContextManager):
 
     def response(self, origin, path):
         status, headers = 200, {}
+        if self.graph.startswith("retry"):
+            with self.lock:
+                attempt = self.counts[(origin, path)]
+            if self.graph == "retry-stress":
+                if path == "/":
+                    links = [(i, f"/page/{p}") for i, count in enumerate(self.pages) for p in range(count)]
+                else:
+                    links = []
+                    number = origin * self.pages[origin] + int(path.rsplit("/", 1)[1])
+                    if number < 50 and attempt == 1 or 50 <= number < 70:
+                        status = 503
+            elif path == "/":
+                links = [(0, p) for p in ("/flaky-429", "/flaky-503", "/always-503", "/not-found",
+                         "/close", "/large", "/healthy", "/redirect", "/malformed", "/date")]
+                links += [(1, f"/healthy/{p}") for p in range(3)]
+            else:
+                links = []
+                if path == "/flaky-429" and attempt == 1:
+                    status, headers = 429, {"rEtRy-AfTeR": "1"}
+                if path == "/flaky-503" and attempt <= 2 or path == "/always-503":
+                    status = 503
+                if path == "/huge-after":
+                    return 503, {"Retry-After": "9223372036854775807"}, b""
+                if path == "/json":
+                    return 200, {"Content-Type": "application/json"}, b"{}"
+                if path == "/broken":
+                    return 200, {}, b"<html><p><b>unfinished"
+                if path == "/not-found":
+                    status = 404
+                if path == "/large":
+                    return 200, {}, b"x" * 262144
+                if path == "/redirect":
+                    return 302, {"Location": self.url(1, "/destination"), "Retry-After": "2"}, b""
+                if path in ("/malformed", "/date") and attempt == 1:
+                    status = 503
+                    headers = {"Retry-After": "junk" if path == "/malformed" else "Wed, 21 Oct 2015 07:28:00 GMT"}
+            body = ("<html>" + "".join(f'<a href="{self.url(i, p)}">link</a>' for i, p in links) + "</html>").encode()
+            return status, headers, body
         if self.graph == "depth":
             graph = {
                 "/": [(0, "/a"), (1, "/b")],
@@ -95,7 +133,9 @@ class Handler(BaseHTTPRequestHandler):
         active = True
         try:
             time.sleep(fixture.delays[origin])
-            if fixture.graph == "failures" and self.path == "/close":
+            with fixture.lock:
+                attempt = fixture.counts[(origin, self.path)]
+            if self.path == "/close" and (fixture.graph == "failures" or fixture.graph == "retry" and attempt == 1):
                 self.close_connection = True
                 return
             status, headers, body = fixture.response(origin, self.path)
@@ -104,10 +144,11 @@ class Handler(BaseHTTPRequestHandler):
                 fixture.active[origin] -= 1
                 active = False
             self.send_response(status)
-            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Type", headers.get("Content-Type", "text/html"))
             self.send_header("Content-Length", str(len(body)))
             for key, value in headers.items():
-                self.send_header(key, value)
+                if key != "Content-Type":
+                    self.send_header(key, value)
             self.end_headers()
             self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError):

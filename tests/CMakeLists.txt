@@ -113,3 +113,19 @@ set_tests_properties(scheduling.stress PROPERTIES TIMEOUT 120 LABELS stress)
 add_test(NAME cli.scheduling COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/scheduling_cli_test.py" "$<TARGET_FILE:fluxcrawl>")
 set_tests_properties(cli.scheduling PROPERTIES TIMEOUT 30)
+
+add_executable(fluxcrawl_retry_policy_test retry_policy_test.cpp)
+target_link_libraries(fluxcrawl_retry_policy_test PRIVATE FluxCrawl::core CURL::libcurl)
+fluxcrawl_enable_warnings(fluxcrawl_retry_policy_test)
+add_test(NAME core.retry_policy COMMAND fluxcrawl_retry_policy_test)
+set_tests_properties(core.retry_policy PROPERTIES TIMEOUT 10)
+
+add_executable(fluxcrawl_retry_crawler_test retry_crawler_test.cpp)
+target_link_libraries(fluxcrawl_retry_crawler_test PRIVATE FluxCrawl::core)
+fluxcrawl_enable_warnings(fluxcrawl_retry_crawler_test)
+add_test(NAME retry.integration COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/retry_integration.py" "$<TARGET_FILE:fluxcrawl_retry_crawler_test>")
+set_tests_properties(retry.integration PROPERTIES TIMEOUT 120)
+add_test(NAME retry.stress COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/retry_integration.py" "$<TARGET_FILE:fluxcrawl_retry_crawler_test>" --stress)
+set_tests_properties(retry.stress PROPERTIES TIMEOUT 120 LABELS stress)

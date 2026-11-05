@@ -47,8 +47,11 @@ void publish_page(CrawlState& state, CrawlResult& result, ProcessedPage page,
     const auto count = page.record.item.retry_count;
     if (transient && count < options.retry.max_retries) {
         // Per-thread RNG initialized once; no shared RNG contention or data races.
-        thread_local std::mt19937_64 random{std::random_device{}()};
-        const auto sample = options.retry.jitter ? std::generate_canonical<double, 53>(random) : 1.0;
+        const auto sample = [&] {
+            if (!options.retry.jitter) { return 1.0; }
+            thread_local std::mt19937_64 random{std::random_device{}()};
+            return std::generate_canonical<double, 53>(random);
+        }();
         const auto backoff = options.retry.delay(count + 1, sample);
         const auto now = HostScheduler::Clock::now();
         const auto room = HostScheduler::Time::max() - now;
@@ -64,8 +67,10 @@ void publish_page(CrawlState& state, CrawlResult& result, ProcessedPage page,
         ++retry.retry_count;
         scheduler.delay(std::move(retry), deadline);
         ++result.retries_scheduled;
-        if (profile) { const auto delay = std::chrono::duration_cast<ProfileDuration>(deadline - now);
-            profile->retry_delay += std::min(delay, ProfileDuration::max() - profile->retry_delay); }
+        if (profile) {
+            const auto delay = std::chrono::duration_cast<ProfileDuration>(deadline - now);
+            profile->retry_delay += std::min(delay, ProfileDuration::max() - profile->retry_delay);
+        }
     } else {
         ++result.resources_completed;
         if (transient && options.retry.max_retries != 0) { ++result.retries_exhausted; }
