@@ -42,3 +42,9 @@ __pycache__/
 /perf.data.old
 /*.trace/
 /*.dtps/
+
+# Runtime crawl snapshots (source fixtures use .txt)
+*.chk
+*.checkpoint
+*.chk.tmp.*
+*.checkpoint.tmp.*
