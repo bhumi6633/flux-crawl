@@ -1,5 +1,7 @@
 #include "checkpoint_runtime.hpp"
 #include <iostream>
+#include <algorithm>
+#include <limits>
 #include <stdexcept>
 
 namespace fluxcrawl::detail {
@@ -35,8 +37,17 @@ void restore_session(const Url& seed, const CrawlOptions& options, const HttpCli
     }
     state.restore_seen(c.seen);
     result = CheckpointManager::copy_counters(c.counters);
+    result.session_start_attempts = result.pages_attempted;
+    result.session_start_responses = result.responses_received;
+    result.session_start_bytes = result.bytes_downloaded;
     const auto now = HostScheduler::Clock::now(); const auto wall = wall_now();
-    for (const auto& work : c.unfinished) {
+    auto unfinished = c.unfinished;
+    // A fresh origin bootstrap must use that origin's shallowest held depth.
+    // Active recovery entries can follow deeper queued entries in the snapshot.
+    std::stable_sort(unfinished.begin(), unfinished.end(), [](const auto& a, const auto& b) {
+        return a.item.depth < b.item.depth;
+    });
+    for (const auto& work : unfinished) {
         auto item = work.item;
         item.recovery = item.recovery || work.was_active;
         const auto deadline = work.eligible_unix_ms ? std::optional{CheckpointManager::steady_deadline(*work.eligible_unix_ms, now, wall)} : std::nullopt;
@@ -51,6 +62,7 @@ std::optional<CrawlCheckpoint> CheckpointRuntime::capture(const CrawlState& stat
     if (!final && result.pages_attempted - last_attempts_ < options_.checkpoint.every) { return std::nullopt; }
     last_attempts_ = result.pages_attempted;
     CrawlCheckpoint c{.seed = seed_};
+    if (sequence_ >= std::numeric_limits<std::uint64_t>::max() - 1) { throw std::overflow_error("Checkpoint sequence exhausted"); }
     c.sequence = ++sequence_; c.options = options_; c.options.checkpoint = {}; c.options.resume_from.reset(); c.options.profile = false;
     c.http = http_; c.seen = state.seen_urls(); c.counters = CheckpointManager::copy_counters(result);
     auto work = scheduler.snapshot(); auto held = policy.snapshot();

@@ -30,6 +30,14 @@ int main(int argc, char* argv[])
         catch (const std::invalid_argument&) { rejected = true; }
         check(rejected, "baseline benchmark rejects robots bootstrap before network access");
     }
+    {
+        fluxcrawl::BenchmarkConfig checkpoint{fluxcrawl::Url::parse("http://127.0.0.1:1/page/0").value()};
+        checkpoint.crawl.checkpoint.path = "unused.chk";
+        bool rejected = false;
+        try { (void)fluxcrawl::BenchmarkRunner{}.run(checkpoint); }
+        catch (const std::invalid_argument&) { rejected = true; }
+        check(rejected, "baseline benchmark rejects checkpoint I/O before fixture contact");
+    }
     for (bool rate : {false, true}) {
         fluxcrawl::BenchmarkConfig limited{fluxcrawl::Url::parse("http://127.0.0.1:1/page/0").value()};
         if (rate) { limited.crawl.scheduling.rate = fluxcrawl::RateLimit{1, 1}; }

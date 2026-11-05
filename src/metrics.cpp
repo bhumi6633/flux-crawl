@@ -34,9 +34,9 @@ CrawlMetrics crawl_metrics(const CrawlResult& result)
     CrawlMetrics metrics;
     const double seconds = std::chrono::duration<double>(result.elapsed).count();
     if (seconds > 0) {
-        metrics.attempts_per_second = static_cast<double>(result.pages_attempted) / seconds;
-        metrics.responses_per_second = static_cast<double>(result.responses_received) / seconds;
-        metrics.bytes_per_second = static_cast<double>(result.bytes_downloaded) / seconds;
+        metrics.attempts_per_second = static_cast<double>(result.pages_attempted - result.session_start_attempts) / seconds;
+        metrics.responses_per_second = static_cast<double>(result.responses_received - result.session_start_responses) / seconds;
+        metrics.bytes_per_second = static_cast<double>(result.bytes_downloaded - result.session_start_bytes) / seconds;
     }
     std::vector<std::chrono::nanoseconds> observations;
     observations.reserve(result.records.size());

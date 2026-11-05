@@ -153,3 +153,21 @@ set_tests_properties(robots.stress PROPERTIES TIMEOUT 180 LABELS stress)
 add_test(NAME cli.robots COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/robots_cli_test.py" "$<TARGET_FILE:fluxcrawl>")
 set_tests_properties(cli.robots PROPERTIES TIMEOUT 90)
+
+add_executable(fluxcrawl_checkpoint_test checkpoint_test.cpp)
+target_link_libraries(fluxcrawl_checkpoint_test PRIVATE FluxCrawl::core)
+target_include_directories(fluxcrawl_checkpoint_test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+fluxcrawl_enable_warnings(fluxcrawl_checkpoint_test)
+add_test(NAME core.checkpoint COMMAND fluxcrawl_checkpoint_test "${CMAKE_CURRENT_BINARY_DIR}/unit-checkpoint.chk")
+set_tests_properties(core.checkpoint PROPERTIES TIMEOUT 15)
+
+add_executable(fluxcrawl_checkpoint_crawler_test checkpoint_crawler_test.cpp)
+target_link_libraries(fluxcrawl_checkpoint_crawler_test PRIVATE FluxCrawl::core)
+fluxcrawl_enable_warnings(fluxcrawl_checkpoint_crawler_test)
+add_test(NAME checkpoint.integration COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/checkpoint_integration.py" "$<TARGET_FILE:fluxcrawl_checkpoint_crawler_test>")
+set_tests_properties(checkpoint.integration PROPERTIES TIMEOUT 180)
+
+add_test(NAME cli.checkpoint COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/checkpoint_cli_test.py" "$<TARGET_FILE:fluxcrawl>")
+set_tests_properties(cli.checkpoint PROPERTIES TIMEOUT 180)

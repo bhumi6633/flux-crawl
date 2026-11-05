@@ -161,7 +161,7 @@ std::optional<HostScheduler::Time> HostScheduler::next_deadline(Time now)
 }
 std::vector<HostScheduler::Work> HostScheduler::snapshot() const
 {
-    assert(track_active_ || active_ == 0);
+    if (!track_active_ && active_ != 0) { throw std::logic_error("Active tracking is required for a recoverable snapshot"); }
     std::vector<Work> work;
     for (auto* host : ready_) {
         for (const auto& [depth, queue] : host->queues) {

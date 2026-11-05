@@ -70,6 +70,7 @@ bool CheckpointManager::same_semantics(const CrawlOptions& a, const CrawlOptions
 void CheckpointManager::validate(const CrawlCheckpoint& c)
 {
     require(c.format_version == CrawlCheckpoint::supported_version, "unsupported format version");
+    require(c.sequence != std::numeric_limits<std::uint64_t>::max(), "sequence overflow");
     c.options.retry.validate(); (void)HostScheduler{1, c.options.scheduling};
     require(c.http.connect_timeout.count() > 0 && c.http.request_timeout.count() > 0
         && c.http.connect_timeout.count() <= std::numeric_limits<long>::max()
@@ -81,12 +82,17 @@ void CheckpointManager::validate(const CrawlCheckpoint& c)
     require(r.pages_attempted <= c.options.max_pages, "attempt budget exceeded");
     require(c.seen.size() <= 1000000 && c.unfinished.size() <= c.seen.size(), "state size invalid");
     std::unordered_set<Url> seen;
-    for (const auto& url : c.seen) { require(seen.insert(url).second, "duplicate seen URL"); }
+    for (const auto& url : c.seen) {
+        require(seen.insert(url).second, "duplicate seen URL");
+        require(!c.options.same_host_only || url.host() == c.seed.host(), "seen URL violates same-host policy");
+    }
     require(seen.contains(c.seed), "seed missing from seen");
     std::unordered_set<Url> pending;
     for (const auto& work : c.unfinished) {
         require(!work.item.policy_request && work.item.depth <= c.options.max_depth
             && work.item.retry_count <= c.options.retry.max_retries, "invalid unfinished metadata");
+        require(work.item.url != c.seed || work.item.depth == 0, "seed depth must be zero");
+        require(work.item.retry_count <= r.pages_attempted, "retry has no prior attempts");
         require(seen.contains(work.item.url) && pending.insert(work.item.url).second, "unknown or duplicate unfinished URL");
         require(!work.eligible_unix_ms || (*work.eligible_unix_ms >= 0 && work.item.retry_count != 0 && !work.was_active), "invalid retry deadline");
     }
@@ -102,6 +108,16 @@ void CheckpointManager::validate(const CrawlCheckpoint& c)
     require(remainder == 0, "attempt accounting incomplete");
     require(r.retries_attempted <= r.pages_attempted && r.recovery_attempts <= r.pages_attempted
         && r.recovery_retry_attempts <= r.recovery_attempts, "invalid retry/recovery counters");
+    require(r.retries_scheduled <= r.pages_attempted && r.retries_attempted >= r.recovery_retry_attempts,
+        "invalid retry scheduling counters");
+    const auto ordinary_retries = r.retries_attempted - r.recovery_retry_attempts;
+    require(ordinary_retries <= r.retries_scheduled && r.retries_cancelled == r.retries_scheduled - ordinary_retries,
+        "retry cancellation counters disagree");
+    require(r.robots_retries_attempted <= r.robots_retries_scheduled
+        && r.robots_retries_cancelled == r.robots_retries_scheduled - r.robots_retries_attempted
+        && r.robots_attempts_unresolved <= r.robots_fetches, "robots counters disagree");
+    require(r.responses_recovered_after_retry <= r.resources_completed && r.retries_exhausted <= r.resources_completed,
+        "terminal counters disagree");
     require(c.completed == c.unfinished.empty(), "completed marker disagrees");
 }
 std::string CheckpointManager::serialize(const CrawlCheckpoint& c)

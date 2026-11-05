@@ -46,6 +46,8 @@ struct CrawlResult {
     std::size_t robots_resources_reused = 0, robots_retries_cancelled = 0;
     std::size_t recovery_attempts = 0, recovery_retry_attempts = 0;
     std::size_t attempts_unresolved = 0, robots_attempts_unresolved = 0;
+    // Ephemeral baselines keep current-session throughput separate from cumulative totals.
+    std::size_t session_start_attempts = 0, session_start_responses = 0, session_start_bytes = 0;
     std::chrono::nanoseconds checkpoint_time{};
     std::size_t checkpoints_written = 0, checkpoint_bytes = 0;
     std::vector<std::string> checkpoint_errors; // Session diagnostics, not persisted.
