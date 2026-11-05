@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <algorithm>
 #include <cstddef>
 #include <optional>
 #include <vector>
@@ -10,10 +11,13 @@ using ProfileDuration = std::chrono::nanoseconds;
 
 struct CommonProfile {
     // Entire extractor: DOM/XPath, URL resolution, per-document dedup and cleanup.
-    ProfileDuration extraction{}, discovery{}, frontier{};
+    ProfileDuration extraction{}, discovery{}, frontier{}, retry_delay{};
+    std::size_t retry_decisions = 0;
     std::size_t extractions = 0, links_considered = 0, links_accepted = 0;
     void merge(const CommonProfile& other) noexcept
     {
+        retry_decisions += other.retry_decisions;
+        retry_delay += std::min(other.retry_delay, ProfileDuration::max() - retry_delay);
         extraction += other.extraction; discovery += other.discovery; frontier += other.frontier;
         extractions += other.extractions; links_considered += other.links_considered;
         links_accepted += other.links_accepted;

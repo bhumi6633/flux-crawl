@@ -52,7 +52,7 @@ public:
             detail::ProfileTimer timer{profile ? &profile->common.frontier : nullptr};
             if (!fatal_) {
                 // The seen check, insertion, enqueue, and result update share this lock.
-                detail::publish_page(state_, result_, std::move(page), seed_, options_, profile ? &profile->common : nullptr);
+                detail::publish_page(state_, result_, std::move(page), seed_, options_, scheduler_, profile ? &profile->common : nullptr);
                 state_.schedule_pending(scheduler_);
             }
             claim.release();
@@ -77,6 +77,7 @@ public:
     {
         // Called only after all workers have joined.
         if (fatal_) { std::rethrow_exception(fatal_); }
+        result_.retries_cancelled = result_.retries_scheduled - result_.retries_attempted;
         result_.urls_discovered = state_.seen_count();
         result_.urls_pending = scheduler_.pending();
         return std::move(result_);
@@ -115,6 +116,7 @@ ThreadPoolCrawler::ThreadPoolCrawler(std::size_t workers, HttpClientOptions http
 
 CrawlResult ThreadPoolCrawler::crawl(const Url& seed, const CrawlOptions& options) const
 {
+    options.retry.validate();
     const auto started = std::chrono::steady_clock::now();
     // Initialize libxml2 on the calling thread. HttpClient already initialized curl.
     const HtmlLinkExtractor initialized_parser;

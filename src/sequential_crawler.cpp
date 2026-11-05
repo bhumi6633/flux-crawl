@@ -14,6 +14,7 @@ SequentialCrawler::SequentialCrawler(HttpClientOptions http_options) : client_{s
 
 CrawlResult SequentialCrawler::crawl(const Url& seed, const CrawlOptions& options) const
 {
+    options.retry.validate();
     const auto started = std::chrono::steady_clock::now();
     CrawlState state{seed, options.max_depth};
     HostScheduler scheduler{1, options.scheduling};
@@ -34,9 +35,10 @@ CrawlResult SequentialCrawler::crawl(const Url& seed, const CrawlOptions& option
             throw std::logic_error("Pending sequential work has no scheduling deadline");
         }
         ++result.pages_attempted;
-        detail::publish_page(state, result, detail::process_page(client_, std::move(item->item), options, profile), seed, options, profile);
+        detail::publish_page(state, result, detail::process_page(client_, std::move(item->item), options, profile), seed, options, scheduler, profile);
         state.schedule_pending(scheduler);
     }
+    result.retries_cancelled = result.retries_scheduled - result.retries_attempted;
     result.urls_discovered = state.seen_count();
     result.urls_pending = scheduler.pending();
     result.elapsed = std::chrono::steady_clock::now() - started;

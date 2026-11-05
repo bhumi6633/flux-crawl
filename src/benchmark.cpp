@@ -110,6 +110,9 @@ std::vector<BenchmarkAggregate> aggregate_samples(std::span<const BenchmarkSampl
 
 BenchmarkReport BenchmarkRunner::run(const BenchmarkConfig& config) const
 {
+    if (config.crawl.retry.max_retries != 0) {
+        throw std::invalid_argument("Baseline benchmarks require disabled retries");
+    }
     if (config.crawl.scheduling.max_per_host || config.crawl.scheduling.rate) {
         throw std::invalid_argument("The single-origin benchmark requires disabled host limits; use the multi-host scenario for scheduling experiments");
     }

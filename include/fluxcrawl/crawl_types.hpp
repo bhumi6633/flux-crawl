@@ -5,6 +5,7 @@
 #include <fluxcrawl/http_response.hpp>
 
 #include <fluxcrawl/profiling.hpp>
+#include <fluxcrawl/retry_policy.hpp>
 #include <vector>
 #include <chrono>
 
@@ -16,6 +17,7 @@ struct CrawlOptions {
     bool same_host_only = false;
     bool profile = false;
     SchedulingOptions scheduling{};
+    RetryPolicy retry{};
 };
 
 struct CrawlResponseMetadata {
@@ -23,6 +25,7 @@ struct CrawlResponseMetadata {
     long status_code;
     std::string content_type;
     std::size_t downloaded_bytes;
+    std::optional<std::chrono::seconds> retry_after{};
 };
 
 struct CrawlRecord {
@@ -37,6 +40,10 @@ struct CrawlResult {
     std::size_t responses_received = 0;
     // All HttpError results, including transport, body-limit, and metadata failures.
     std::size_t fetch_failures = 0;
+    std::size_t retries_scheduled = 0, retries_attempted = 0, retries_exhausted = 0;
+    std::size_t responses_recovered_after_retry = 0, retry_after_used = 0;
+    std::size_t retries_cancelled = 0; // Scheduled but not attempted at budget stop.
+    std::size_t resources_completed = 0, terminal_http_failures = 0, terminal_fetch_failures = 0;
     std::size_t html_pages_processed = 0;
     std::size_t urls_discovered = 0; // Accepted by CrawlState, including the seed.
     std::size_t urls_pending = 0;

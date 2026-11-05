@@ -92,6 +92,7 @@ AsyncCrawler::AsyncCrawler(std::size_t concurrency, HttpClientOptions http_optio
 
 CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
 {
+    options.retry.validate();
     const auto started = std::chrono::steady_clock::now();
     CrawlState state{seed, options.max_depth};
     HostScheduler scheduler{concurrency_, options.scheduling};
@@ -104,7 +105,7 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
 
     const auto publish = [&](HttpResult response, CrawlItem item, std::chrono::nanoseconds latency) {
         detail::publish_page(state, result,
-            detail::process_response(std::move(response), std::move(item), options, latency, common), seed, options, common);
+            detail::process_response(std::move(response), std::move(item), options, latency, common), seed, options, scheduler, common);
         state.schedule_pending(scheduler);
     };
     const auto fill = [&] {
@@ -178,6 +179,7 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
         }
     }
     transfers.close();
+    result.retries_cancelled = result.retries_scheduled - result.retries_attempted;
     result.urls_discovered = state.seen_count();
     result.urls_pending = scheduler.pending();
     result.elapsed = std::chrono::steady_clock::now() - started;
