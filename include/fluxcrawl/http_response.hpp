@@ -3,6 +3,7 @@
 #include <fluxcrawl/url.hpp>
 
 #include <cstddef>
+#include <chrono>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -19,6 +20,7 @@ struct HttpResponse {
     std::string body;
     // Decoded body bytes retained, not compressed wire bytes or headers.
     std::size_t downloaded_bytes = 0;
+    std::optional<std::chrono::seconds> retry_after{};
 };
 
 enum class HttpErrorCode { CurlError, BodyTooLarge, BufferFailure, InvalidEffectiveUrl, InvalidResponse };

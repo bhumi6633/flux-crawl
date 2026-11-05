@@ -1,4 +1,5 @@
 #include "curl_transfer.hpp"
+#include <fluxcrawl/retry_policy.hpp>
 
 #include <curl/curl.h>
 
@@ -45,6 +46,30 @@ std::size_t receive(char* data, std::size_t size, std::size_t count, void* user)
         // Exceptions must never cross the C callback boundary.
         buffer.allocation_failed = true;
         return 0;
+    }
+    return length;
+}
+
+std::size_t header(char* data, std::size_t size, std::size_t count, void* user) noexcept
+{
+    if (size != 0 && count > std::numeric_limits<std::size_t>::max() / size) { return 0; }
+    const auto length = size * count;
+    auto& transfer = *static_cast<CurlTransfer*>(user);
+    std::string_view line{data, length};
+    // Reset at every response block, including redirects and informational responses.
+    if (line.starts_with("HTTP/")) { transfer.retry_after.reset(); }
+    constexpr std::string_view name = "retry-after:";
+    if (line.size() >= name.size()) {
+        bool match = true;
+        for (std::size_t i = 0; i < name.size(); ++i) {
+            auto ch = line[i];
+            if (ch >= 'A' && ch <= 'Z') { ch = static_cast<char>(ch + ('a' - 'A')); }
+            if (ch != name[i]) { match = false; break; }
+        }
+        if (match) {
+            const auto parsed = parse_retry_after(line.substr(name.size()));
+            if (parsed && (!transfer.retry_after || *parsed > *transfer.retry_after)) { transfer.retry_after = parsed; }
+        }
     }
     return length;
 }
@@ -100,6 +125,8 @@ CurlTransfer::CurlTransfer(const Url& requested, const HttpClientOptions& option
     set(CURLOPT_ACCEPT_ENCODING, "");
     set(CURLOPT_WRITEFUNCTION, &receive);
     set(CURLOPT_WRITEDATA, &body);
+    set(CURLOPT_HEADERFUNCTION, &header);
+    set(CURLOPT_HEADERDATA, this);
 }
 
 HttpResult CurlTransfer::finish(CURLcode code)
@@ -136,7 +163,7 @@ HttpResult CurlTransfer::finish(CURLcode code)
         return HttpError{HttpErrorCode::InvalidResponse, 0, "No HTTP status received"};
     }
     const auto downloaded = body.bytes.size();
-    return HttpResponse{url, *final_url, status, content_type ? content_type : "", std::move(body.bytes), downloaded};
+    return HttpResponse{url, *final_url, status, content_type ? content_type : "", std::move(body.bytes), downloaded, retry_after};
 }
 
 } // namespace fluxcrawl::detail

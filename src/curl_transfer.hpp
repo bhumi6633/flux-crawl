@@ -27,6 +27,7 @@ struct CurlTransfer {
     Url url;
     std::array<char, CURL_ERROR_SIZE> error_buffer{};
     BodyBuffer body;
+    std::optional<std::chrono::seconds> retry_after;
     // Declared last: cleanup runs before destruction of callback storage.
     std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> handle;
     CURLcode setup = CURLE_OK;
