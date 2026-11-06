@@ -48,3 +48,9 @@ __pycache__/
 *.checkpoint
 *.chk.tmp.*
 *.checkpoint.tmp.*
+
+# Single-process SQLite crawl state; source fixtures are generated in tests
+*.db
+*.db-wal
+*.db-shm
+*.db.owner

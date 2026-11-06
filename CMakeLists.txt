@@ -10,12 +10,19 @@ include(cmake/CompilerWarnings.cmake)
 find_package(CURL 7.85 REQUIRED)
 find_package(LibXml2 REQUIRED)
 find_package(Threads REQUIRED)
+find_package(SQLite3 3.24 REQUIRED)
+if(TARGET SQLite3::SQLite3)
+    set(FLUXCRAWL_SQLITE_TARGET SQLite3::SQLite3)
+else()
+    set(FLUXCRAWL_SQLITE_TARGET SQLite::SQLite3)
+endif()
 
 add_library(fluxcrawl_core
     src/url.cpp
     src/html_parser.cpp
     src/crawl_frontier.cpp
     src/checkpoint_runtime.cpp
+    src/sqlite_store.cpp
     src/checkpoint_file.cpp
     src/checkpoint.cpp
     src/crawl_policy.cpp
@@ -37,7 +44,7 @@ add_library(fluxcrawl_core
 add_library(FluxCrawl::core ALIAS fluxcrawl_core)
 target_include_directories(fluxcrawl_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_compile_features(fluxcrawl_core PUBLIC cxx_std_20)
-target_link_libraries(fluxcrawl_core PRIVATE CURL::libcurl LibXml2::LibXml2 Threads::Threads)
+target_link_libraries(fluxcrawl_core PRIVATE CURL::libcurl LibXml2::LibXml2 Threads::Threads ${FLUXCRAWL_SQLITE_TARGET})
 target_compile_definitions(fluxcrawl_core PRIVATE FLUXCRAWL_BUILD_TYPE="$<CONFIG>")
 fluxcrawl_enable_warnings(fluxcrawl_core)
 

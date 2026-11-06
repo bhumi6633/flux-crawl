@@ -6,6 +6,7 @@
 
 #include <fluxcrawl/profiling.hpp>
 #include <fluxcrawl/checkpoint_control.hpp>
+#include <fluxcrawl/persistence_control.hpp>
 #include <fluxcrawl/retry_policy.hpp>
 #include <vector>
 #include <chrono>
@@ -21,6 +22,7 @@ struct CrawlOptions {
     RetryPolicy retry{};
     bool respect_robots = false;
     CheckpointControl checkpoint{};
+    SqliteControl sqlite{};
     std::shared_ptr<const CrawlCheckpoint> resume_from{};
 };
 
@@ -48,6 +50,8 @@ struct CrawlResult {
     std::size_t attempts_unresolved = 0, robots_attempts_unresolved = 0;
     // Ephemeral baselines keep current-session throughput separate from cumulative totals.
     std::size_t session_start_attempts = 0, session_start_responses = 0, session_start_bytes = 0;
+    PersistenceMetrics persistence{};
+    std::vector<std::string> persistence_errors;
     std::chrono::nanoseconds checkpoint_time{};
     std::size_t checkpoints_written = 0, checkpoint_bytes = 0;
     std::vector<std::string> checkpoint_errors; // Session diagnostics, not persisted.

@@ -171,3 +171,9 @@ set_tests_properties(checkpoint.integration PROPERTIES TIMEOUT 180)
 add_test(NAME cli.checkpoint COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/checkpoint_cli_test.py" "$<TARGET_FILE:fluxcrawl>")
 set_tests_properties(cli.checkpoint PROPERTIES TIMEOUT 180)
+
+add_executable(fluxcrawl_sqlite_store_test sqlite_store_test.cpp)
+target_link_libraries(fluxcrawl_sqlite_store_test PRIVATE FluxCrawl::core ${FLUXCRAWL_SQLITE_TARGET})
+fluxcrawl_enable_warnings(fluxcrawl_sqlite_store_test)
+add_test(NAME core.sqlite_store COMMAND fluxcrawl_sqlite_store_test "${CMAKE_CURRENT_BINARY_DIR}/sqlite-unit")
+set_tests_properties(core.sqlite_store PROPERTIES TIMEOUT 20)

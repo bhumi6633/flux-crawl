@@ -26,8 +26,11 @@ struct CrawlCheckpoint {
 class CheckpointManager {
 public:
     static constexpr std::size_t max_file_bytes = 64 * 1024 * 1024;
+    [[nodiscard]] static CrawlCheckpoint metadata_only(const CrawlCheckpoint& checkpoint);
     [[nodiscard]] static CrawlResult copy_counters(const CrawlResult& result);
-    static void validate(const CrawlCheckpoint& checkpoint);
+    static void validate(const CrawlCheckpoint& checkpoint, std::size_t maximum_seen = 1000000);
+    [[nodiscard]] static std::string serialize_metadata(const CrawlCheckpoint& checkpoint);
+    [[nodiscard]] static CrawlCheckpoint deserialize_metadata(std::string_view text);
     [[nodiscard]] static std::string serialize(const CrawlCheckpoint& checkpoint);
     [[nodiscard]] static CrawlCheckpoint deserialize(std::string_view text);
     [[nodiscard]] static CrawlCheckpoint read(const std::filesystem::path& path);

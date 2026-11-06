@@ -56,6 +56,16 @@ void options(std::ostream& out, const CrawlOptions& o)
         << ' ' << (o.scheduling.rate ? o.scheduling.rate->burst : 0) << '\n';
 }
 }
+CrawlCheckpoint CheckpointManager::metadata_only(const CrawlCheckpoint& source)
+{
+    CrawlCheckpoint c{.seed = source.seed};
+    c.format_version = source.format_version; c.application_version = source.application_version;
+    c.options.max_depth = source.options.max_depth; c.options.max_pages = source.options.max_pages;
+    c.options.same_host_only = source.options.same_host_only; c.options.respect_robots = source.options.respect_robots;
+    c.options.retry = source.options.retry; c.options.scheduling = source.options.scheduling;
+    c.http = source.http; c.sequence = source.sequence; c.completed = source.completed;
+    c.counters = copy_counters(source.counters); return c;
+}
 CrawlResult CheckpointManager::copy_counters(const CrawlResult& result)
 {
     CrawlResult copy;
@@ -67,7 +77,7 @@ bool CheckpointManager::same_semantics(const CrawlOptions& a, const CrawlOptions
     std::ostringstream x, y; x.imbue(std::locale::classic()); y.imbue(std::locale::classic());
     x << std::setprecision(17); y << std::setprecision(17); options(x, a); options(y, b); return x.str() == y.str();
 }
-void CheckpointManager::validate(const CrawlCheckpoint& c)
+void CheckpointManager::validate(const CrawlCheckpoint& c, std::size_t maximum_seen)
 {
     require(c.format_version == CrawlCheckpoint::supported_version, "unsupported format version");
     require(c.sequence != std::numeric_limits<std::uint64_t>::max(), "sequence overflow");
@@ -80,7 +90,7 @@ void CheckpointManager::validate(const CrawlCheckpoint& c)
         && c.http.user_agent.find('\0') == std::string::npos, "invalid HTTP configuration");
     const auto& r = c.counters;
     require(r.pages_attempted <= c.options.max_pages, "attempt budget exceeded");
-    require(c.seen.size() <= 1000000 && c.unfinished.size() <= c.seen.size(), "state size invalid");
+    require(c.seen.size() <= maximum_seen && c.unfinished.size() <= c.seen.size(), "state size invalid");
     std::unordered_set<Url> seen;
     for (const auto& url : c.seen) {
         require(seen.insert(url).second, "duplicate seen URL");
@@ -120,9 +130,8 @@ void CheckpointManager::validate(const CrawlCheckpoint& c)
         "terminal counters disagree");
     require(c.completed == c.unfinished.empty(), "completed marker disagrees");
 }
-std::string CheckpointManager::serialize(const CrawlCheckpoint& c)
+std::string CheckpointManager::serialize_metadata(const CrawlCheckpoint& c)
 {
-    validate(c);
     std::ostringstream out; out.imbue(std::locale::classic()); out << std::setprecision(17);
     out << "FLUXCRAWL_CHECKPOINT " << c.format_version << "\napplication " << std::quoted(c.application_version)
         << "\nseed " << std::quoted(c.seed.str()) << "\nsequence " << c.sequence << "\ncompleted " << c.completed << '\n';
@@ -130,6 +139,12 @@ std::string CheckpointManager::serialize(const CrawlCheckpoint& c)
     out << "http " << c.http.connect_timeout.count() << ' ' << c.http.request_timeout.count() << ' '
         << c.http.max_redirects << ' ' << c.http.max_body_bytes << ' ' << c.http.use_environment_proxy << ' ' << std::quoted(c.http.user_agent) << '\n';
     for (const auto& [name, member] : fields) { out << name << ' ' << c.counters.*member << '\n'; }
+    return out.str();
+}
+std::string CheckpointManager::serialize(const CrawlCheckpoint& c)
+{
+    validate(c);
+    std::ostringstream out; out << serialize_metadata(c);
     auto sorted = c.seen;
     std::sort(sorted.begin(), sorted.end(), [](const Url& a, const Url& b) { return a.str() < b.str(); });
     out << "seen " << sorted.size() << '\n';
@@ -143,9 +158,9 @@ std::string CheckpointManager::serialize(const CrawlCheckpoint& c)
     out << "END\n";
     auto text = out.str(); require(text.size() <= max_file_bytes, "snapshot exceeds 64 MiB limit"); return text;
 }
-CrawlCheckpoint CheckpointManager::deserialize(std::string_view text)
+namespace {
+CrawlCheckpoint read_metadata(Reader& r)
 {
-    require(text.size() <= max_file_bytes, "file exceeds 64 MiB limit"); Reader r{text};
     r.key("FLUXCRAWL_CHECKPOINT"); const auto version_number = r.number();
     require(version_number == CrawlCheckpoint::supported_version, "unsupported format version");
     r.key("application"); auto app = r.string(); r.key("seed"); auto seed = r.url();
@@ -162,6 +177,18 @@ CrawlCheckpoint CheckpointManager::deserialize(std::string_view text)
     const auto redirects = r.number(); require(redirects <= static_cast<std::uint64_t>(std::numeric_limits<long>::max()), "redirect limit overflow");
     c.http.max_redirects = static_cast<long>(redirects); c.http.max_body_bytes = r.size(); c.http.use_environment_proxy = r.boolean(); c.http.user_agent = r.string();
     for (const auto& [name, member] : fields) { r.key(name); c.counters.*member = r.size(); }
+    return c;
+}
+}
+CrawlCheckpoint CheckpointManager::deserialize_metadata(std::string_view text)
+{
+    require(text.size() <= 1024 * 1024, "metadata too large");
+    Reader r{text}; auto c = read_metadata(r); r.in >> std::ws; require(r.in.eof(), "trailing metadata"); return c;
+}
+CrawlCheckpoint CheckpointManager::deserialize(std::string_view text)
+{
+    require(text.size() <= max_file_bytes, "file exceeds 64 MiB limit"); Reader r{text};
+    auto c = read_metadata(r);
     r.key("seen"); auto count = r.size(); require(count <= 1000000, "too many seen URLs");
     for (std::size_t i = 0; i < count; ++i) { c.seen.push_back(r.url()); }
     r.key("unfinished"); count = r.size(); require(count <= c.seen.size(), "too many unfinished items");
