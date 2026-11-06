@@ -68,6 +68,15 @@ with tempfile.TemporaryDirectory() as tmp:
    _,p=run('resume',db,'--engine','threaded','--workers','8')
    assert site.snapshot()['counts'].get((0,'/private/blocked'),0)==0
    seen,_,payload=inspect(db);assert site.url(0,'/private/blocked') in seen and 'urls_blocked_by_robots 1\n' in payload
+ for mode in ('sqlite','bloom-sqlite'):
+  with FanoutFixture(500,1) as site:
+   db=root/f'unbounded-{mode}.db';command=flags(site,db,mode,'sequential',100)
+   start=command.index('--pending-high-watermark');del command[start:start+4]
+   s,_=run(*command,'--unbounded-pending','--max-pages','2000','--stop-after-attempts','1')
+   assert int(s['Uncommitted seen cache peak'])<=64 and int(s['Deferred discovery URLs'])==436
+   s,_=run('resume',db,'--engine','async','--concurrency','8')
+   seen,pending,payload=inspect(db);assert len(seen)==site.total and not pending and 'completed 1\n' in payload
+   assert all(n==1 for n in site.snapshot()['counts'].values()) and int(s['Uncommitted seen cache remaining'])==0
  # Abrupt loss recovers exact committed membership and rebuilds Bloom.
  with FanoutFixture(10,60,duplicates=True,delay=.02) as site:
   db=root/'crash.db';process=subprocess.Popen([BINARY,*map(str,flags(site,db,'bloom-sqlite','threaded',1))],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)

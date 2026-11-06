@@ -91,7 +91,7 @@ void CheckpointManager::validate(const CrawlCheckpoint& c, std::size_t maximum_s
     c.options.dedup.validate();
     c.options.retry.validate(); c.options.backpressure.validate();
     DiscoverySpool::validate(c.deferred, c.options.max_depth, c.options.same_host_only ? std::optional<std::string_view>{c.seed.host()} : std::nullopt);
-    require(c.options.backpressure.enabled || c.deferred.count() == 0, "deferred state requires admission control"); (void)HostScheduler{1, c.options.scheduling};
+    require(c.options.backpressure.enabled || c.options.dedup.mode != DedupMode::Memory || c.deferred.count() == 0, "deferred state requires incremental admission"); (void)HostScheduler{1, c.options.scheduling};
     require(c.http.connect_timeout.count() > 0 && c.http.request_timeout.count() > 0
         && c.http.connect_timeout.count() <= std::numeric_limits<long>::max()
         && c.http.request_timeout.count() <= std::numeric_limits<long>::max()

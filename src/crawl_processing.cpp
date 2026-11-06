@@ -35,7 +35,7 @@ ProcessedPage process_response(HttpResult fetched, CrawlItem item, const CrawlOp
     std::shared_ptr<DiskLinks> disk_links;
     if (parse) {
         ProfileTimer timer{profile ? &profile->extraction : nullptr};
-        if (options.backpressure.enabled) {
+        if (options.backpressure.enabled || options.dedup.mode != DedupMode::Memory) {
             disk_links = std::make_shared<DiskLinks>();
             HtmlLinkExtractor{}.for_each_link(response.body, response.effective_url, [&](const Url& url) { disk_links->append(url); });
         } else { links = HtmlLinkExtractor{}.extract_links(response.body, response.effective_url); }
@@ -112,7 +112,7 @@ void publish_page(CrawlState& state, CrawlResult& result, ProcessedPage page,
         const auto offer = [&](const Url& link) {
             if (profile) { ++profile->links_considered; }
             if (!options.same_host_only || link.host() == seed.host()) {
-                if (options.backpressure.enabled) { state.defer(link, page.record.item.depth + 1); }
+                if (options.backpressure.enabled || options.dedup.mode != DedupMode::Memory) { state.defer(link, page.record.item.depth + 1); }
                 else {
                     const bool accepted = state.discover_from(page.record.item, link);
                     if (profile && accepted) { ++profile->links_accepted; }

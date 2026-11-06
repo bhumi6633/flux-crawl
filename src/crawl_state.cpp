@@ -63,7 +63,7 @@ void CrawlState::configure_seen(std::unique_ptr<SeenSet> seen) { seen_ = std::mo
 
 void CrawlState::configure_spool(const std::filesystem::path& prefix, bool persistent)
 {
-    if (pressure_options_.enabled) { spool_ = std::make_shared<DiscoverySpool>(prefix, persistent); }
+    if (pressure_options_.enabled || dedup_options_.mode != DedupMode::Memory) { spool_ = std::make_shared<DiscoverySpool>(prefix, persistent); }
 }
 void CrawlState::defer(const Url& url, std::size_t depth)
 {
