@@ -29,6 +29,9 @@ void print_help()
                  "Options:\n"
                  "  --state-db FILE       New SQLite crawl database (must not exist)\n"
                  "  --db-batch-size N     Logical mutations per batch (default: 100)\n"
+                 "  --pending-high-watermark N  Admission capacity (default: 10000)\n"
+                 "  --pending-low-watermark N   Resume admission at this level (default: 7500)\n"
+                 "  --unbounded-pending     Disable queue admission control\n"
                  "  --checkpoint FILE      Atomic snapshot output (default: disabled)\n"
                  "  --checkpoint-every N   Resource attempts between snapshots (default: 100)\n"
                  "  --stop-after-attempts N Graceful stop at cumulative attempts; requires checkpoint\n"
@@ -58,6 +61,7 @@ int main(int argc, char* argv[])
     if (argc > 1 && std::string_view{argv[1]} == "benchmark") { return benchmark_main(argc, argv); }
     if (argc > 1 && std::string_view{argv[1]} == "resume") { return checkpoint_resume_main(argc, argv); }
     bool show_help = false;
+    bool pending_high_supplied = false, pending_low_supplied = false, pressure_disabled = false;
     bool checkpoint_interval_supplied = false, db_batch_supplied = false;
     bool show_version = false;
     std::string_view seed;
@@ -76,6 +80,17 @@ int main(int argc, char* argv[])
             show_help = true;
         } else if (argument == "--version") {
             show_version = true;
+        } else if (argument == "--unbounded-pending") {
+            pressure_disabled = true; options.backpressure.enabled = false;
+        } else if (argument == "--pending-high-watermark" || argument == "--pending-low-watermark") {
+            if (index + 1 >= argc) { std::cerr << "fluxcrawl: missing pending watermark.\n"; return 1; }
+            const std::string_view value{argv[++index]}; std::size_t n = 0;
+            const auto [end, error] = std::from_chars(value.data(), value.data()+value.size(), n);
+            if (value.empty() || error != std::errc{} || end != value.data()+value.size() || (argument == "--pending-high-watermark" && n == 0)) {
+                std::cerr << "fluxcrawl: invalid pending watermark.\n"; return 1;
+            }
+            if (argument == "--pending-high-watermark") { options.backpressure.high_watermark = n; pending_high_supplied = true; }
+            else { options.backpressure.low_watermark = n; pending_low_supplied = true; }
         } else if (argument == "--checkpoint" || argument == "--state-db") {
             if (index + 1 >= argc || std::string_view{argv[index + 1]}.empty()) {
                 std::cerr << "fluxcrawl: --checkpoint requires a path.\n"; return 1;
@@ -185,6 +200,9 @@ int main(int argc, char* argv[])
         }
     }
 
+    if (pressure_disabled && (pending_high_supplied || pending_low_supplied)) { std::cerr << "fluxcrawl: unbounded pending conflicts with watermarks.\n"; return 1; }
+    if (pending_high_supplied && !pending_low_supplied) { options.backpressure.low_watermark = options.backpressure.high_watermark - (options.backpressure.high_watermark / 4) - (options.backpressure.high_watermark % 4 != 0); }
+    try { options.backpressure.validate(); } catch (const std::exception& error) { std::cerr << "fluxcrawl: " << error.what() << '\n'; return 1; }
     if ((!options.sqlite.path.empty() && !options.checkpoint.path.empty())
         || (checkpoint_interval_supplied && options.checkpoint.path.empty())
         || (db_batch_supplied && options.sqlite.path.empty())
@@ -238,7 +256,7 @@ int main(int argc, char* argv[])
             std::cout
                       << "\nMax depth: " << options.max_depth
                       << "\nMax pages: " << options.max_pages
-                      << "\n\n" << (result.urls_pending == 0 ? "Frontier exhausted" : options.checkpoint.stop_after_attempts && result.pages_attempted >= *options.checkpoint.stop_after_attempts ? "Checkpoint stop reached" : "Page limit reached")
+                      << "\n\n" << (result.urls_pending == 0 && result.pressure.deferred_urls == 0 ? "Frontier exhausted" : options.checkpoint.stop_after_attempts && result.pages_attempted >= *options.checkpoint.stop_after_attempts ? "Checkpoint stop reached" : "Page limit reached")
                       << "\nPages attempted: " << result.pages_attempted
                       << "\nResponses: " << result.responses_received
                       << "\nHTML pages processed: " << result.html_pages_processed
@@ -267,6 +285,7 @@ int main(int argc, char* argv[])
                     << "\nTerminal HTTP failures: " << result.terminal_http_failures
                     << "\nTerminal fetch failures: " << result.terminal_fetch_failures << '\n';
             }
+            if (result.pages_attempted != 0) { fluxcrawl::detail::print_pressure_metrics(std::cout, result, options.backpressure); }
             if (!options.checkpoint.path.empty()) {
                 std::cout << "Checkpoints written: " << result.checkpoints_written
                     << "\nCheckpoint bytes: " << result.checkpoint_bytes

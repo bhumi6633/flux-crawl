@@ -13,7 +13,7 @@ enum class EngineType { Sequential, Threaded, Async };
 struct BenchmarkConfig {
     // Must name /page/0 on tools/benchmark_server.py at literal IPv4 loopback.
     Url seed;
-    CrawlOptions crawl{20, 100, true};
+    CrawlOptions crawl{.max_depth = 20, .max_pages = 100, .same_host_only = true, .backpressure = {.enabled = false}};
     std::vector<EngineType> engines{EngineType::Sequential, EngineType::Threaded, EngineType::Async};
     std::vector<std::size_t> concurrency{1, 2, 4, 8};
     std::size_t runs = 3;
@@ -36,6 +36,7 @@ struct BenchmarkSample {
     CrawlMetrics metrics;
     std::size_t server_requests = 0, server_peak_active = 0;
     std::optional<ProfileSummary> profile{};
+    QueuePressureMetrics pressure{};
 };
 struct BenchmarkAggregate {
     EngineType engine;
@@ -51,6 +52,7 @@ struct BenchmarkReport {
     std::string version, build_type;
     std::size_t measured_runs = 0;
     std::int64_t started_at_unix_ms = 0; // Reproducibility metadata only; never used for durations.
+    BackpressureOptions backpressure{.enabled = false};
     std::vector<BenchmarkSample> samples;
     std::vector<BenchmarkAggregate> aggregates;
 };

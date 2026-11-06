@@ -95,7 +95,9 @@ void write_benchmark_csv(std::ostream& output, const BenchmarkReport& report)
            "server_requests,server_peak_active,scenario,latency_mean_ms,latency_min_ms,latency_max_ms,measured_runs,started_at_unix_ms,"
            "shared_anchors,delay_pattern,profile_enabled,extraction_ms,discovery_ms,frontier_ms,extractions,links_considered,links_accepted,"
            "lock_wait_ms,worker_idle_ms,worker_activity_ms,lock_acquisitions,cv_waits,worker_wakeups,worker_requests,max_active_workers,"
-           "multi_wait_ms,completion_processing_ms,refill_ms,event_loop_iterations,multi_waits,completions,refills,max_active_transfers,worker_profiles\n";
+           "multi_wait_ms,completion_processing_ms,refill_ms,event_loop_iterations,multi_waits,completions,refills,max_active_transfers,worker_profiles";
+    if (report.backpressure.enabled) { out << ",pending_high,pending_low,peak_pending,pressure_activations,pressure_ms"; }
+    out << '\n';
     for (const auto& sample : report.samples) {
         out << csv_quote(report.version) << ',' << csv_quote(report.build_type) << ',' << csv_quote(report.seed) << ','
             << report.workload.pages << ',' << report.workload.fanout << ',' << report.workload.delay_ms << ','
@@ -117,6 +119,8 @@ void write_benchmark_csv(std::ostream& output, const BenchmarkReport& report)
         out << ',' << report.measured_runs << ',' << report.started_at_unix_ms
             << ',' << report.workload.shared_anchors << ',' << csv_quote(report.workload.delay_pattern);
         profile_csv(out, sample.profile);
+        if (report.backpressure.enabled) { out << ',' << report.backpressure.high_watermark << ',' << report.backpressure.low_watermark
+            << ',' << sample.pressure.peak_pending << ',' << sample.pressure.activations << ',' << milliseconds(sample.pressure.pressure_time); }
         out << '\n';
     }
     output << out.str();
@@ -154,6 +158,8 @@ void write_benchmark_table(std::ostream& output, const BenchmarkReport& report)
             out << ' ';
         }
         out << '\n';
+        if (report.backpressure.enabled) { out << "  Pending high=" << report.backpressure.high_watermark << " low=" << report.backpressure.low_watermark
+            << " peak=" << sample.pressure.peak_pending << " pressure_activations=" << sample.pressure.activations << " pressure_ms=" << milliseconds(sample.pressure.pressure_time) << '\n'; }
         if (sample.profile) { profile_table(out, *sample.profile); }
     }
     out << "Medians across measured runs (request percentiles remain per trial):\n";

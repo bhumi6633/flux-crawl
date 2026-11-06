@@ -70,6 +70,7 @@ int checkpoint_resume_main(int argc, char* argv[])
             << "\nCheckpoint bytes: " << result.checkpoint_bytes
             << "\nCheckpoint I/O time ms: " << std::chrono::duration<double, std::milli>(result.checkpoint_time).count() << '\n';
         if (database) { fluxcrawl::detail::print_database_metrics(std::cout, result); }
+        fluxcrawl::detail::print_pressure_metrics(std::cout, result, options.backpressure);
         return result.persistence_errors.empty() && result.checkpoint_errors.empty() && result.robots_fetch_failures == 0 && result.terminal_fetch_failures == 0
             && (options.retry.max_retries == 0 || result.terminal_http_failures == 0) ? 0 : 1;
     } catch (const std::exception& error) { std::cerr << "fluxcrawl resume: " << error.what() << '\n'; return 1; }

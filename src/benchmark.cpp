@@ -172,6 +172,7 @@ BenchmarkReport BenchmarkRunner::run(const BenchmarkConfig& config) const
     if (!config.scenario.empty() && config.scenario != report.workload.scenario) {
         throw std::invalid_argument("Benchmark scenario does not match server metadata");
     }
+    report.backpressure = config.crawl.backpressure;
     report.max_depth = config.crawl.max_depth;
     report.max_pages = config.crawl.max_pages;
     report.warmups = config.warmups;
@@ -203,7 +204,7 @@ BenchmarkReport BenchmarkRunner::run(const BenchmarkConfig& config) const
             throw std::runtime_error("Invalid benchmark sample: server request counts or concurrency mismatch");
         }
         return BenchmarkSample{engine, concurrency, run, result.pages_attempted, result.responses_received,
-            result.fetch_failures, result.bytes_downloaded, result.elapsed, crawl_metrics(result), stats.requests, stats.peak, std::move(result.profile)};
+            result.fetch_failures, result.bytes_downloaded, result.elapsed, crawl_metrics(result), stats.requests, stats.peak, std::move(result.profile), result.pressure};
     };
     for (std::size_t warmup = 0; warmup < config.warmups; ++warmup) {
         for (const auto& [engine, concurrency] : configurations) { (void)trial(engine, concurrency, 0); }
