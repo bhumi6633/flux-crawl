@@ -270,7 +270,8 @@ and non-HTML types never produce discoveries. Extraction uses the effective URL
 after redirects. Fetch errors are recorded and the remaining queue continues;
 retries are optional and disabled by default (see below). Malformed HTML uses the existing parser's recovery behavior.
 
-All discoveries go through `CrawlState::discover_from`; no second seen set exists.
+Accepted discoveries go through `CrawlState` and its shared admission gate;
+`SeenSet` supplies exact membership behind that boundary.
 Depth 0 is the seed, and limits are inclusive. Depth barriers preserve BFS;
 within a depth, hosts rotate fairly and each host retains discovery order.
 `max_pages` counts request attempts, including retries, failures and HTTP errors;
@@ -921,12 +922,12 @@ attempt count when checkpointing is enabled. This is distinct from the immutable
 page budget: resume can continue the remaining budget. No signal-handler I/O is
 implemented; after abrupt termination, resume uses the last valid periodic file.
 
-Format version two stores canonical seen URLs, unfinished resources with depth
-and retry metadata, cumulative counters, seed, semantic crawl/HTTP configuration,
-and previously computed retry deadlines as Unix milliseconds. It also records admission
-watermarks and deferred-discovery companion prefixes; version-one files still load
-with admission disabled. Preserve referenced companion directories when saving
-a recovery bundle (see Step 16 below). It excludes bodies,
+Format version three stores canonical seen URLs in MemoryExact snapshots,
+unfinished resources with depth and retry metadata, cumulative counters, seed, semantic crawl/HTTP configuration,
+and previously computed retry deadlines as Unix milliseconds. It also records
+admission watermarks, dedup configuration and deferred-discovery companion prefixes.
+Version-one/two files still load as MemoryExact (version one has admission disabled).
+Preserve referenced companion directories when saving a recovery bundle (see Step 16 below). It excludes bodies,
 DOMs, handles, threads, detailed record history, profiling, RNG state and parsed
 robots policies. Format compatibility is separate from application version.
 
@@ -965,7 +966,8 @@ All three engines support an optional SQLite backend alongside snapshot recovery
 Exact deduplication and scheduling stay in memory. SQLite records canonical seen
 URLs, ready/delayed/active logical work, retry counts and wall-clock eligibility,
 semantic configuration, cumulative counters, and the durable completion marker.
-It does not remove seen-set RAM growth.
+With default MemoryExact dedup it does not remove seen-set RAM growth. Step 17
+adds explicit SQLite-backed membership modes below.
 
 ```bash
 ./build/fluxcrawl --engine threaded --workers 8 --state-db crawl.db \
@@ -1098,4 +1100,105 @@ Opt-in heavy stress stays outside the default suite:
 ```sh
 python3 tests/backpressure_stress.py ./build-release/fluxcrawl
 # Or configure CTest with -DFLUXCRAWL_SLOW_TESTS=ON, then run -R backpressure.stress.
+```
+
+
+## Scalable exact deduplication (Step 17)
+
+MemoryExact remains the default. Large persistent crawls can keep global exact
+membership in SQLite, optionally placing a Bloom filter in front of its reads.
+
+| Strategy | Exactness and memory | Cost |
+| --- | --- | --- |
+| `memory` | Existing exact unordered set; RAM grows with seen URLs | Low membership latency; optional `--seen-reserve N` |
+| `sqlite` | Exact DB authority plus bounded uncommitted cache | Prepared membership reads; requires SQLite persistence |
+| `bloom-sqlite` | Exact overall; bit array plus SQLite/cache | Avoids negative DB reads; adds hashing and rebuild startup |
+
+```sh
+./build/fluxcrawl --engine async --concurrency 16 --state-db crawl.db \
+  --dedup bloom-sqlite --bloom-expected 1000000 --bloom-fp-rate 0.01 \
+  --pending-high-watermark 1000 --pending-low-watermark 750 \
+  --depth 3 --max-pages 1000000 https://example.test/
+./build/fluxcrawl resume crawl.db --engine threaded --workers 8
+```
+
+Choose expected Bloom capacity for the complete seen set, including previously
+accepted resources—not the pending queue or retry-attempt count. Invalid modes,
+zero capacity, nonfinite/out-of-range probabilities and unsupported combinations
+are rejected. Bloom controls require `bloom-sqlite`. SQLite modes require
+`--state-db`; they cannot use snapshot-only or no-persistence mode. MemoryExact
+continues to support no persistence, snapshots and SQLite storage.
+
+A Bloom false positive **does not skip a URL**:
+
+```text
+Bloom says maybe -> exact cache/SQLite says absent -> URL accepted normally
+```
+
+Only exact membership can reject a duplicate. Bloom negatives avoid the membership
+SELECT while the exact acceptance still enters the normal seen+work transaction.
+Accepted but uncommitted identities stay in an exact cache until their capture
+sequence commits. Stale Bloom positives after rollback only add exact checks.
+No BloomOnly lossy mode is exposed.
+
+The bitset uses mathematically sized uint64 words and two defined byte hashes to
+derive probes. It is protected by the existing discovery coordinator. Saturation
+is visible through occupancy, insertion count and a capacity-exceeded summary;
+overfill increases exact checks while preserving correctness. Scalable modes use
+incremental disk admission even if queue watermarks are explicitly disabled, so
+one page does not become an uncontrolled uncommitted membership-cache batch.
+
+On SQLite-backed resume, validation streams seen rows without rebuilding a full
+URL vector/hash set. Bloom is rebuilt by another streaming scan before requests
+start; no Bloom bitset is persisted. Payload format three stores dedup settings,
+while SQLite schema remains version one. Existing format-one/two snapshots remain
+readable. Saved dedup configuration is retained on resume. The existing deferred
+companion-directory recovery contract still applies.
+
+Prepared reads and commits share one serialized connection. Reads can pause the
+async loop or a threaded coordinator; no asynchronous DB I/O or per-worker DB
+connections were added. Summaries expose lookup/insert time, DB reads, exact
+inserts/conflicts, uncommitted-cache peaks, Bloom negatives/maybes/false positives,
+occupancy and rebuild/startup time. Retries bypass new-URL dedup, and robots-skipped
+URLs remain seen.
+
+Actual Release measurements at one million synthetic URLs:
+
+| Strategy | Peak process RSS | Closed main DB | 100k mixed lookups |
+| --- | ---: | ---: | ---: |
+| MemoryExact | 242.8 MB | — | 41.5 ms |
+| SQLiteExact | 15.6 MB | 37.3 MB | 325.3 ms |
+| Bloom+SQLite, 1% | 18.0 MB | 37.3 MB | 208.5 ms |
+
+The Bloom bit array itself was 1,198,136 bytes. In a 95%-new lookup stream it
+reduced DB reads from 100,000 to 5,921. In an 80%-duplicate stream, 80,195 reads
+remained. A 100k-capacity filter overfilled to 500k entries showed 83.3% measured
+false positives on absent queries; exact results still matched the reference.
+
+On the fixed-engine 10,021-resource crawl with SQLite persistence for every mode,
+final elapsed medians were 628/614/603 ms for memory/SQL/Bloom. Trial variation
+exceeded these gaps, so this is not a stable throughput ranking. Seen-set RAM
+savings are clearer in the large synthetic experiment. Memory remains a simple
+normal default; SQLite is an explicit RAM/I/O tradeoff, and Bloom is most useful
+when many queries are for new URLs and a capacity estimate is available.
+
+[Full design, probability/saturation tables, startup and crawl measurements,
+100k restart stress, and verification](docs/deduplication.md) includes reproduction
+commands. The next memory bottleneck is retained attempt/response history and
+host metadata; total process memory is still not strictly bounded. No distributed
+crawler, sharding, Cuckoo filter or frontend was added.
+
+```mermaid
+flowchart TD
+  D[Canonical candidate] --> A[Admission capacity]
+  A --> M{Dedup strategy}
+  M -->|memory| H[Exact hash insert-if-absent]
+  M -->|sqlite| E[Exact pending cache / SQLite read]
+  M -->|bloom-sqlite| B{Bloom}
+  B -->|maybe| E
+  B -->|definitely absent| N[Exact new-membership cache]
+  E -->|absent| N
+  H -->|new| W[Schedule and journal unfinished work]
+  N --> W
+  W --> T[Atomic seen + work + counters commit]
 ```

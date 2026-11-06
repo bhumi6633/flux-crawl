@@ -1,5 +1,10 @@
 # Persistent storage experiments and design
 
+Step 17 adds SQLiteExact and Bloom+SQLite membership. Its format-three payload
+retains schema version one; scalable recovery streams validation and does not
+materialize the full seen set. [Current dedup design and measurements](deduplication.md)
+qualify the default-MemoryExact RAM/startup discussion and historical data below.
+
 Step 16 extends the metadata payload to format two while retaining SQLite schema
 version one. Bounded crawls can reference append-only deferred-discovery companion
 files; preserve them with the database. See the [current admission and recovery

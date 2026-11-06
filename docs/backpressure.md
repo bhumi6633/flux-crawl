@@ -1,5 +1,10 @@
 # Step 16: bounded pending work
 
+Step 17 adds [scalable exact membership](deduplication.md), keeps these admission
+invariants, and extends metadata to format three. Even with watermarks disabled,
+SQLite-backed dedup uses incremental disk publication to control its uncommitted
+cache. Historical Step 16 measurements below used MemoryExact.
+
 ## Baseline before admission changes
 
 Release, deterministic graph: seed →20 branch pages →500 unique leaves each,
