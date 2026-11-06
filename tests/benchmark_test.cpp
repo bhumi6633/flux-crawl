@@ -119,6 +119,15 @@ int main(int argc, char* argv[])
         config.crawl = {1, 100, true};
         actual = fluxcrawl::BenchmarkRunner{}.run(config);
         check(actual.expected_pages == 5 && actual.samples[0].pages_attempted == 5, "known reachable depth subset");
+        config.crawl.backpressure = {2, 1, true};
+        actual = fluxcrawl::BenchmarkRunner{}.run(config);
+        for (const auto& row : actual.samples) {
+            check(row.pages_attempted == 5 && row.pressure.peak_unfinished <= 2 && row.pressure.activations > 0,
+                  "enabled benchmark keeps workload and records hard capacity");
+        }
+        std::ostringstream pressure_csv; fluxcrawl::write_benchmark_csv(pressure_csv, actual);
+        check(pressure_csv.str().find("pending_high,pending_low,peak_pending,pressure_activations,pressure_ms") != std::string::npos,
+              "enabled benchmark exports reproducible pressure metadata");
         const auto rejects = [&](fluxcrawl::BenchmarkConfig bad) {
             try { (void)fluxcrawl::BenchmarkRunner{}.run(bad); }
             catch (const std::exception&) { return true; }

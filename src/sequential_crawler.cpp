@@ -27,6 +27,7 @@ CrawlResult SequentialCrawler::crawl(const Url& seed, const CrawlOptions& option
     auto* profile = result.profile ? &result.profile->common : nullptr;
     while ((scheduler.pending() != 0 || state.has_deferred()) && result.pages_attempted < options.max_pages && !checkpoints.stop(result)) {
         policy.schedule(state, scheduler, result, profile);
+        if (auto snapshot = checkpoints.capture(state, scheduler, policy, result)) { detail::PersistenceRuntime::report(result, checkpoints.write(*snapshot)); }
         auto item = [&] {
             detail::ProfileTimer timer{profile ? &profile->frontier : nullptr};
             return scheduler.acquire(HostScheduler::Clock::now());
@@ -55,6 +56,7 @@ CrawlResult SequentialCrawler::crawl(const Url& seed, const CrawlOptions& option
     if (auto snapshot = checkpoints.capture(state, scheduler, policy, result, true)) {
         detail::PersistenceRuntime::report(result, checkpoints.write(*snapshot));
     }
+    result.pressure = state.pressure_metrics();
     result.elapsed = std::chrono::steady_clock::now() - started;
     return result;
 }

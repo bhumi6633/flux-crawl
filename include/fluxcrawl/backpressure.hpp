@@ -13,7 +13,7 @@ struct QueuePressureMetrics {
     std::size_t current_pending = 0, peak_pending = 0, peak_unfinished = 0, peak_seen = 0;
     std::size_t deferred_urls = 0, peak_deferred = 0, deferred_admissions = 0;
     std::size_t activations = 0, resumptions = 0;
-    std::chrono::nanoseconds pressure_time{};
+    std::chrono::nanoseconds pressure_time{}, deferred_io_time{};
 };
 class PressureGate {
 public:
@@ -25,6 +25,7 @@ public:
         else if (active_ && unfinished <= options_.low_watermark) { active_ = false; elapsed_ += now - since_; ++resumptions_; }
     }
     bool admits(std::size_t unfinished) const { return !options_.enabled || (!active_ && unfinished < options_.high_watermark); }
+    bool has_activated() const { return activations_ != 0; }
     bool active() const { return active_; }
     void metrics(QueuePressureMetrics& out, Clock::time_point now = Clock::now()) const {
         out.activations = activations_; out.resumptions = resumptions_;

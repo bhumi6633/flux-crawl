@@ -120,7 +120,7 @@ void publish_page(CrawlState& state, CrawlResult& result, ProcessedPage page,
             }
         };
         for (const auto& link : page.links) { offer(link); }
-        if (page.disk_links) { page.disk_links->rewind(); while (auto link = page.disk_links->next()) { offer(*link); } }
+        if (page.disk_links) { page.disk_links->rewind(); while (auto link = page.disk_links->next()) { offer(*link); } state.note_discovery_io(page.disk_links->io_time()); }
     }
     result.records.push_back(std::move(page.record));
 }

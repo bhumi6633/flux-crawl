@@ -184,3 +184,19 @@ set_tests_properties(sqlite.integration PROPERTIES TIMEOUT 240)
 add_test(NAME sqlite.stress COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/sqlite_integration.py" "$<TARGET_FILE:fluxcrawl>" --stress)
 set_tests_properties(sqlite.stress PROPERTIES TIMEOUT 240 LABELS stress)
+
+add_executable(fluxcrawl_backpressure_test backpressure_test.cpp)
+target_link_libraries(fluxcrawl_backpressure_test PRIVATE FluxCrawl::core)
+fluxcrawl_enable_warnings(fluxcrawl_backpressure_test)
+add_test(NAME core.backpressure COMMAND fluxcrawl_backpressure_test)
+set_tests_properties(core.backpressure PROPERTIES TIMEOUT 30)
+add_test(NAME backpressure.integration COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/backpressure_integration.py" "$<TARGET_FILE:fluxcrawl>")
+set_tests_properties(backpressure.integration PROPERTIES TIMEOUT 180)
+
+option(FLUXCRAWL_SLOW_TESTS "Include 10k-resource backpressure stress in CTest" OFF)
+if(FLUXCRAWL_SLOW_TESTS)
+    add_test(NAME backpressure.stress COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/backpressure_stress.py" "$<TARGET_FILE:fluxcrawl>")
+    set_tests_properties(backpressure.stress PROPERTIES TIMEOUT 300 LABELS stress)
+endif()

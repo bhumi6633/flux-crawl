@@ -10,7 +10,8 @@ namespace fluxcrawl {
 using ProfileDuration = std::chrono::nanoseconds;
 
 struct CommonProfile {
-    // Entire extractor: DOM/XPath, URL resolution, per-document dedup and cleanup.
+    // Entire extractor: DOM traversal, URL resolution, per-document dedup and cleanup.
+    // Bounded mode uses temporary disk dedup; legacy benchmark uses DOM/XPath.
     ProfileDuration extraction{}, discovery{}, frontier{}, retry_delay{};
     std::size_t retry_decisions = 0;
     std::size_t extractions = 0, links_considered = 0, links_accepted = 0;

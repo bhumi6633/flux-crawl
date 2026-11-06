@@ -75,7 +75,7 @@ bool CrawlState::admit_deferred(std::size_t unfinished)
     gate_.update(unfinished);
     if (!spool_ || !gate_.admits(unfinished)) { return false; }
     for (std::size_t scanned = 0; scanned < 64; ++scanned) {
-        auto item = spool_->pop(); if (!item) { break; }
+        auto item = spool_->pop(gate_.has_activated()); if (!item) { break; }
         if (discover(item->url, item->depth)) { ++metrics_.deferred_admissions; return true; }
     }
     return false;
@@ -89,7 +89,7 @@ void CrawlState::observe(std::size_t unfinished, std::size_t pending)
 }
 QueuePressureMetrics CrawlState::pressure_metrics() const
 {
-    auto copy = metrics_; gate_.metrics(copy); copy.deferred_urls = spool_ ? spool_->size() : 0; return copy;
+    auto copy = metrics_; gate_.metrics(copy); copy.deferred_urls = spool_ ? spool_->size() : 0; if (spool_) { copy.deferred_io_time += spool_->io_time(); } return copy;
 }
 
 } // namespace fluxcrawl

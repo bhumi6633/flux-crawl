@@ -1,6 +1,7 @@
 #pragma once
 #include <fluxcrawl/crawl_frontier.hpp>
 #include <filesystem>
+#include <chrono>
 #include <memory>
 #include <string>
 #include <vector>
@@ -14,6 +15,7 @@ struct DeferredExtent {
 struct DeferredState {
     std::string directory;
     std::vector<DeferredExtent> extents;
+    std::uint64_t next_order = 0;
     std::size_t count() const;
 };
 // Append-only per-depth disk FIFO. Capture pins immutable byte prefixes; consumed
@@ -24,22 +26,25 @@ public:
     ~DiscoverySpool();
     DiscoverySpool(const DiscoverySpool&) = delete;
     void append(const CrawlItem& item);
-    std::optional<CrawlItem> pop();
+    std::optional<CrawlItem> pop(bool fair = true);
     std::size_t size() const;
     DeferredState capture() const;
     void sync() const;
+    std::chrono::nanoseconds io_time() const;
     void restore(const DeferredState& state);
-    static void validate(const DeferredState& state, std::size_t max_depth);
+    static void validate(const DeferredState& state, std::size_t max_depth, std::optional<std::string_view> required_host = {});
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
-// A completed response's links stream to a temporary file, not a URL vector.
+// A completed response's unique links stream to a temporary disk table,
+// preserving first-seen document order without a URL vector or RAM hash set.
 class DiskLinks {
 public:
     DiskLinks();
     ~DiskLinks();
     void append(const Url& url);
+    std::chrono::nanoseconds io_time() const;
     void rewind();
     std::optional<Url> next();
 private:

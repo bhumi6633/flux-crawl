@@ -185,8 +185,9 @@ void SqliteStore::apply_with_hook(const CrawlMutationBatch& batch, const std::fu
         && batch.metadata.http.use_environment_proxy == p.metadata->http.use_environment_proxy, "semantic/HTTP configuration changed");
     require(batch.metadata.seen.empty() && batch.metadata.unfinished.empty(), "batch must be incremental");
     auto next_metadata = CheckpointManager::metadata_only(batch.metadata);
+    const auto began = Clock::now();
     if (batch.metadata.spool_sync) { batch.metadata.spool_sync->sync(); }
-    const auto began = Clock::now(); Transaction transaction{p.db()};
+    Transaction transaction{p.db()};
     std::size_t seen = p.seen_count, pending = p.work_count, active = p.active_count, applied = 0, row_changes = 0;
     std::unordered_set<Url> new_urls;
     for (const auto& url : batch.discoveries) {

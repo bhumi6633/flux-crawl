@@ -18,6 +18,7 @@ public:
     void configure_spool(const std::filesystem::path& prefix, bool persistent);
     void defer(const Url& url, std::size_t depth);
     bool admit_deferred(std::size_t unfinished);
+    void note_discovery_io(std::chrono::nanoseconds time) { metrics_.deferred_io_time += time; }
     void observe(std::size_t unfinished, std::size_t pending);
     bool has_deferred() const { return spool_ && spool_->size() != 0; }
     std::shared_ptr<DiscoverySpool> spool() const { return spool_; }

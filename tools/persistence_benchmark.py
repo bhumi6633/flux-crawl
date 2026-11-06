@@ -26,7 +26,7 @@ def trial(binary, engine, batch, pages, concurrency, delay_ms):
             server.RequestHandlerClass = BenchmarkHandler
         expected = 1 + pages * 4
         command = [str(binary), "--engine", engine, "--workers" if engine == "threaded" else "--concurrency", str(concurrency),
-                   "--depth", "1", "--max-pages", str(expected), "--max-per-host", "4", "--ignore-robots"]
+                   "--unbounded-pending", "--depth", "1", "--max-pages", str(expected), "--max-per-host", "4", "--ignore-robots"]
         db = Path(tmp) / "crawl.db"
         if batch is not None:
             command += ["--state-db", str(db), "--db-batch-size", str(batch)]
@@ -50,7 +50,7 @@ def trial(binary, engine, batch, pages, concurrency, delay_ms):
                 assert "completed 1\n" in payload
         return {
             "persistence_mode": "none" if batch is None else "sqlite", "batch_size": batch or "", "engine": engine,
-            "origins": 4, "pages_per_origin": pages, "global_concurrency": concurrency, "max_per_host": 4,
+            "backpressure_mode": "disabled", "origins": 4, "pages_per_origin": pages, "global_concurrency": concurrency, "max_per_host": 4,
             "delay_ms": delay_ms, "requests": expected, "process_elapsed_ms": elapsed * 1000,
             "process_requests_per_second": expected / elapsed, "transactions": int(summary.get("SQLite transactions", 0)),
             "mutations": int(summary.get("SQLite mutations", 0)), "average_batch_mutations": float(summary.get("SQLite average batch mutations", 0)),

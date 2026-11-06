@@ -208,6 +208,7 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
     result.urls_discovered = state.seen_count();
     result.urls_pending = scheduler.resource_pending() + policy.held();
     checkpoint(true);
+    result.pressure = state.pressure_metrics();
     result.elapsed = std::chrono::steady_clock::now() - started;
     return result;
 }

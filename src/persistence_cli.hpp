@@ -11,6 +11,7 @@ inline void print_pressure_metrics(std::ostream& out, const CrawlResult& result,
         << "\nPeak seen URLs: " << p.peak_seen << "\nDeferred discovery URLs: " << p.deferred_urls
         << "\nPeak deferred discoveries: " << p.peak_deferred << "\nDeferred admissions: " << p.deferred_admissions
         << "\nBackpressure activations: " << p.activations << "\nAdmission resumptions: " << p.resumptions
+        << "\nDeferred spool I/O time ms: " << std::chrono::duration<double, std::milli>(p.deferred_io_time).count()
         << "\nTime under pressure ms: " << std::chrono::duration<double, std::milli>(p.pressure_time).count() << '\n';
 }
 inline void print_database_metrics(std::ostream& out, const CrawlResult& result)

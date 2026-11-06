@@ -84,8 +84,9 @@ void CheckpointManager::validate(const CrawlCheckpoint& c, std::size_t maximum_s
 {
     require((c.format_version == 1 || c.format_version == CrawlCheckpoint::supported_version), "unsupported format version");
     require(c.sequence != std::numeric_limits<std::uint64_t>::max(), "sequence overflow");
+    require(c.format_version != 1 || (!c.options.backpressure.enabled && c.deferred.count() == 0), "legacy format cannot store pressure/deferred state");
     c.options.retry.validate(); c.options.backpressure.validate();
-    DiscoverySpool::validate(c.deferred, c.options.max_depth);
+    DiscoverySpool::validate(c.deferred, c.options.max_depth, c.options.same_host_only ? std::optional<std::string_view>{c.seed.host()} : std::nullopt);
     require(c.options.backpressure.enabled || c.deferred.count() == 0, "deferred state requires admission control"); (void)HostScheduler{1, c.options.scheduling};
     require(c.http.connect_timeout.count() > 0 && c.http.request_timeout.count() > 0
         && c.http.connect_timeout.count() <= std::numeric_limits<long>::max()
@@ -95,6 +96,7 @@ void CheckpointManager::validate(const CrawlCheckpoint& c, std::size_t maximum_s
         && c.http.user_agent.find('\0') == std::string::npos, "invalid HTTP configuration");
     const auto& r = c.counters;
     require(r.pages_attempted <= c.options.max_pages, "attempt budget exceeded");
+    require(!c.options.backpressure.enabled || c.unfinished.size() <= c.options.backpressure.high_watermark, "admitted unfinished work exceeds pressure capacity");
     require(c.seen.size() <= maximum_seen && c.unfinished.size() <= c.seen.size(), "state size invalid");
     std::unordered_set<Url> seen;
     for (const auto& url : c.seen) {
@@ -146,7 +148,7 @@ std::string CheckpointManager::serialize_metadata(const CrawlCheckpoint& c)
     for (const auto& [name, member] : fields) { out << name << ' ' << c.counters.*member << '\n'; }
     if (c.format_version >= 2) {
         out << "pressure " << c.options.backpressure.enabled << ' ' << c.options.backpressure.high_watermark << ' ' << c.options.backpressure.low_watermark << '\n';
-        out << "spool " << std::quoted(c.deferred.directory) << ' ' << c.deferred.extents.size() << '\n';
+        out << "spool " << std::quoted(c.deferred.directory) << ' ' << c.deferred.extents.size() << ' ' << c.deferred.next_order << '\n';
         for (const auto& e : c.deferred.extents) { out << "extent " << e.depth << ' ' << e.begin << ' ' << e.end << ' ' << e.count << ' ' << e.file_id << ' ' << std::quoted(e.origin) << '\n'; }
     }
     return out.str();
@@ -189,7 +191,7 @@ CrawlCheckpoint read_metadata(Reader& r)
     for (const auto& [name, member] : fields) { r.key(name); c.counters.*member = r.size(); }
     if (c.format_version >= 2) {
         r.key("pressure"); c.options.backpressure.enabled = r.boolean(); c.options.backpressure.high_watermark = r.size(); c.options.backpressure.low_watermark = r.size();
-        r.key("spool"); c.deferred.directory = r.string(); const auto count = r.size(); require(count <= 10000, "too many deferred depth extents");
+        r.key("spool"); c.deferred.directory = r.string(); const auto count = r.size(); c.deferred.next_order=r.number(); require(count <= 10000, "too many deferred depth extents");
         for (std::size_t n=0; n<count; ++n) { r.key("extent"); const auto depth=r.size(); const auto begin=r.number(); const auto end=r.number(); const auto entries=r.number(); const auto id=r.number(); const auto origin=r.string(); c.deferred.extents.push_back({depth,begin,end,entries,id,origin}); }
     } else { c.options.backpressure.enabled = false; }
     return c;

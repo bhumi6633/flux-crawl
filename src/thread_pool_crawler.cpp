@@ -27,6 +27,14 @@ public:
         auto lock = acquire_lock(profile);
         for (;;) {
             policy_.schedule(state_, scheduler_, result_, profile ? &profile->common : nullptr);
+            // Admission can hit the mutation threshold even when a host/deadline
+            // prevents claiming work. Slow durable writes backpressure this worker.
+            if (auto snapshot = checkpoints_.capture(state_, scheduler_, policy_, result_)) {
+                lock.unlock();
+                detail::PersistenceRuntime::Report report;
+                try { report = checkpoints_.write(*snapshot); } catch (...) { lock.lock(); throw; }
+                lock.lock(); detail::PersistenceRuntime::report(result_, std::move(report));
+            }
             if (fatal_ || result_.pages_attempted == options_.max_pages || checkpoints_.stop(result_)) { return std::nullopt; }
             {
                 auto claim = [&] {
@@ -99,6 +107,7 @@ public:
         if (auto snapshot = checkpoints_.capture(state_, scheduler_, policy_, result_, true)) {
             detail::PersistenceRuntime::report(result_, checkpoints_.write(*snapshot));
         }
+        result_.pressure = state_.pressure_metrics();
         return std::move(result_);
     }
 
