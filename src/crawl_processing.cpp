@@ -32,14 +32,18 @@ ProcessedPage process_response(HttpResult fetched, CrawlItem item, const CrawlOp
     const bool parse = response.status_code >= 200 && response.status_code < 300
         && is_html_content_type(response.content_type) && item.depth < options.max_depth;
     std::vector<Url> links;
+    std::shared_ptr<DiskLinks> disk_links;
     if (parse) {
         ProfileTimer timer{profile ? &profile->extraction : nullptr};
-        links = HtmlLinkExtractor{}.extract_links(response.body, response.effective_url);
+        if (options.backpressure.enabled) {
+            disk_links = std::make_shared<DiskLinks>();
+            HtmlLinkExtractor{}.for_each_link(response.body, response.effective_url, [&](const Url& url) { disk_links->append(url); });
+        } else { links = HtmlLinkExtractor{}.extract_links(response.body, response.effective_url); }
         if (profile) { ++profile->extractions; }
     }
     return {{std::move(item), CrawlResponseMetadata{std::move(response.effective_url),
              response.status_code, std::move(response.content_type), response.downloaded_bytes, response.retry_after}, latency},
-            std::move(links), parse};
+            std::move(links), parse, {}, std::move(disk_links)};
 }
 
 void publish_page(CrawlState& state, CrawlResult& result, ProcessedPage page,
@@ -105,13 +109,18 @@ void publish_page(CrawlState& state, CrawlResult& result, ProcessedPage page,
     if (page.html_processed) { ++result.html_pages_processed; }
     {
         ProfileTimer timer{profile ? &profile->discovery : nullptr};
-        for (const auto& link : page.links) {
+        const auto offer = [&](const Url& link) {
             if (profile) { ++profile->links_considered; }
             if (!options.same_host_only || link.host() == seed.host()) {
-                const bool accepted = state.discover_from(page.record.item, link);
-                if (profile && accepted) { ++profile->links_accepted; }
+                if (options.backpressure.enabled) { state.defer(link, page.record.item.depth + 1); }
+                else {
+                    const bool accepted = state.discover_from(page.record.item, link);
+                    if (profile && accepted) { ++profile->links_accepted; }
+                }
             }
-        }
+        };
+        for (const auto& link : page.links) { offer(link); }
+        if (page.disk_links) { page.disk_links->rewind(); while (auto link = page.disk_links->next()) { offer(*link); } }
     }
     result.records.push_back(std::move(page.record));
 }

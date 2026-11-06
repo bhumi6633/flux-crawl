@@ -12,6 +12,7 @@ struct ProcessedPage {
     std::vector<Url> links;
     bool html_processed = false;
     std::optional<RobotsPolicy> robots_rules{};
+    std::shared_ptr<DiskLinks> disk_links{};
 };
 
 ProcessedPage process_response(HttpResult fetched, CrawlItem item, const CrawlOptions& options, std::chrono::nanoseconds latency, CommonProfile* profile = nullptr);

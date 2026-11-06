@@ -83,4 +83,23 @@ std::vector<Url> HtmlLinkExtractor::extract_links(std::string_view html, const U
     return links;
 }
 
+void HtmlLinkExtractor::for_each_link(std::string_view html, const Url& base_url, const std::function<void(const Url&)>& visitor) const
+{
+    if (html.empty() || html.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) { return; }
+    constexpr int options = HTML_PARSE_RECOVER | HTML_PARSE_NOERROR | HTML_PARSE_NOWARNING | HTML_PARSE_NONET | HTML_PARSE_NODEFDTD;
+    const std::unique_ptr<xmlDoc, decltype(&xmlFreeDoc)> document{
+        htmlReadMemory(html.data(), static_cast<int>(html.size()), nullptr, nullptr, options), xmlFreeDoc};
+    if (!document) { return; }
+    auto* root = xmlDocGetRootElement(document.get());
+    for (auto* node = root; node;) {
+        if (node->type == XML_ELEMENT_NODE && xmlStrcasecmp(node->name, BAD_CAST "a") == 0) {
+            const std::unique_ptr<xmlChar, XmlStringDeleter> href{xmlGetProp(node, BAD_CAST "href")};
+            if (href) { if (auto url = Url::resolve(base_url, trim_html_space(reinterpret_cast<const char*>(href.get())))) { visitor(*url); } }
+        }
+        if (node->children) { node = node->children; continue; }
+        while (node && !node->next) { node = node->parent; if (node == reinterpret_cast<xmlNode*>(document.get())) { node = nullptr; } }
+        if (node) { node = node->next; }
+    }
+}
+
 } // namespace fluxcrawl
