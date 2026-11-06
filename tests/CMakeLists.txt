@@ -177,3 +177,10 @@ target_link_libraries(fluxcrawl_sqlite_store_test PRIVATE FluxCrawl::core ${FLUX
 fluxcrawl_enable_warnings(fluxcrawl_sqlite_store_test)
 add_test(NAME core.sqlite_store COMMAND fluxcrawl_sqlite_store_test "${CMAKE_CURRENT_BINARY_DIR}/sqlite-unit")
 set_tests_properties(core.sqlite_store PROPERTIES TIMEOUT 20)
+
+add_test(NAME sqlite.integration COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/sqlite_integration.py" "$<TARGET_FILE:fluxcrawl>")
+set_tests_properties(sqlite.integration PROPERTIES TIMEOUT 240)
+add_test(NAME sqlite.stress COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/sqlite_integration.py" "$<TARGET_FILE:fluxcrawl>" --stress)
+set_tests_properties(sqlite.stress PROPERTIES TIMEOUT 240 LABELS stress)
