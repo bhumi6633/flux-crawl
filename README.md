@@ -14,8 +14,9 @@ No general performance ranking is claimed.
 ## Build
 
 Requires CMake 3.20 or newer, a C++20 compiler, and libcurl 7.85 or newer with
-development headers, plus libxml2 development headers. On Debian/Ubuntu, install
-`libcurl4-openssl-dev libxml2-dev`; the macOS Command Line Tools SDK includes both.
+development headers, plus libxml2 and SQLite 3.24+ development headers. On Debian/Ubuntu, install
+`libcurl4-openssl-dev libxml2-dev libsqlite3-dev`; the macOS Command Line Tools SDK
+provides these libraries. SQLite is discovered through CMake FindSQLite3.
 Python 3 is required when building tests (the default); no Python packages are
 needed. Use `-DBUILD_TESTING=OFF` for a library/CLI build without Python.
 URL operations remain local; HTTP fetches and crawler calls make requests.
@@ -953,3 +954,60 @@ are excluded from request latency samples. Baseline benchmarks reject checkpoint
 or resume configurations. Runtime `.chk` files and temporary snapshots are ignored.
 
 See [format, consistency, durability, tests and recovery limits](docs/checkpointing.md).
+
+
+## Incremental SQLite persistence (Step 15)
+
+All three engines support an optional SQLite backend alongside snapshot recovery.
+Exact deduplication and scheduling stay in memory. SQLite records canonical seen
+URLs, ready/delayed/active logical work, retry counts and wall-clock eligibility,
+semantic configuration, cumulative counters, and the durable completion marker.
+It does not remove seen-set RAM growth.
+
+```bash
+./build/fluxcrawl --engine threaded --workers 8 --state-db crawl.db \
+  --db-batch-size 100 --depth 5 --max-pages 100000 https://example.test/
+./build/fluxcrawl resume crawl.db --engine async --concurrency 64
+```
+
+A new crawl requires a new file. Choose one backend: `--checkpoint` and
+`--state-db` conflict. Resume detects the format; engine, concurrency and batch
+size may change, while saved semantic configuration and attempt budgets remain.
+A completed database reports that it is already completed without network traffic.
+
+Logical mutations accumulate until the threshold (default 100), explicit stop,
+or final flush. Related seen/work/counter changes commit atomically. Thresholds
+are checked at coordinator boundaries, so a transaction can contain more than N
+mutations; repeated work changes are coalesced. A clean return flushes the tail.
+A failed flush reports an error and leaves the earlier committed prefix resumable.
+
+SQLite uses WAL and synchronous=FULL. Committed transactions are the recovery
+boundary; buffered changes may disappear on abrupt process loss. Recovery is
+at least once: active resources can be requested again, and network effects
+cannot be rolled back. Robots policy becomes Unknown and rate limiters restart
+cold. One FluxCrawl process owns a DB; a held `.db.owner` advisory lock prevents
+another owner. The empty sidecar remains after close to preserve lock identity.
+SQLite manages WAL/SHM files; do not delete them from an active database.
+
+| Mode | Benefit | Cost / recovery boundary |
+| --- | --- | --- |
+| None | Simple, no persistence overhead | Process loss loses state |
+| Snapshot | Portable, easy to inspect | Whole-state rewrite; last valid snapshot |
+| SQLite | Incremental atomic changes | Transaction overhead; last committed batch |
+
+```mermaid
+flowchart TD
+  E[Sequential / Threaded / Async] --> L[Logical crawl transitions]
+  L --> H[In-memory exact seen set and scheduler]
+  L --> P[Shared persistence orchestration]
+  P --> S[Snapshot checkpoint]
+  P --> D[SQLite batched store]
+  S --> R[Shared recovery model]
+  D --> R
+  R --> H
+```
+
+[Storage design, measured batching and restore performance, and validation](docs/persistence.md)
+include reproducible Release commands. The original engine-comparison benchmark
+continues to reject persistence settings; a separate persistence benchmark reports
+commit time independently of request latency.
