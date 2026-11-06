@@ -5,6 +5,7 @@
 #include <fluxcrawl/http_response.hpp>
 
 #include <fluxcrawl/profiling.hpp>
+#include <fluxcrawl/backpressure.hpp>
 #include <fluxcrawl/checkpoint_control.hpp>
 #include <fluxcrawl/persistence_control.hpp>
 #include <fluxcrawl/retry_policy.hpp>
@@ -19,6 +20,7 @@ struct CrawlOptions {
     bool same_host_only = false;
     bool profile = false;
     SchedulingOptions scheduling{};
+    BackpressureOptions backpressure{};
     RetryPolicy retry{};
     bool respect_robots = false;
     CheckpointControl checkpoint{};
@@ -50,6 +52,7 @@ struct CrawlResult {
     std::size_t attempts_unresolved = 0, robots_attempts_unresolved = 0;
     // Ephemeral baselines keep current-session throughput separate from cumulative totals.
     std::size_t session_start_attempts = 0, session_start_responses = 0, session_start_bytes = 0;
+    QueuePressureMetrics pressure{};
     PersistenceMetrics persistence{};
     std::vector<std::string> persistence_errors;
     std::chrono::nanoseconds checkpoint_time{};

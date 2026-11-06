@@ -31,6 +31,7 @@ add_library(fluxcrawl_core
     src/retry_policy.cpp
     src/host_scheduler.cpp
     src/crawl_state.cpp
+    src/discovery_spool.cpp
     src/curl_transfer.cpp
     src/http_client.cpp
     src/http_response.cpp
