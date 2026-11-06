@@ -133,6 +133,7 @@ struct SqliteStore::Impl {
 };
 SqliteStore::SqliteStore(std::unique_ptr<Impl> impl) : impl_{std::move(impl)} {}
 SqliteStore::~SqliteStore() = default;
+std::string SqliteStore::library_version() { return sqlite3_libversion(); }
 std::unique_ptr<SqliteStore> SqliteStore::create(const std::filesystem::path& path, const CrawlCheckpoint& initial)
 {
     CheckpointManager::validate(initial, std::numeric_limits<std::size_t>::max());
@@ -185,11 +186,11 @@ void SqliteStore::apply_with_hook(const CrawlMutationBatch& batch, const std::fu
     require(batch.metadata.seen.empty() && batch.metadata.unfinished.empty(), "batch must be incremental");
     auto next_metadata = CheckpointManager::metadata_only(batch.metadata);
     const auto began = Clock::now(); Transaction transaction{p.db()};
-    std::size_t seen = p.seen_count, pending = p.work_count, active = p.active_count, applied = 0;
+    std::size_t seen = p.seen_count, pending = p.work_count, active = p.active_count, applied = 0, row_changes = 0;
     std::unordered_set<Url> new_urls;
     for (const auto& url : batch.discoveries) {
         require(new_urls.insert(url).second, "duplicate discovery mutation");
-        auto& s = *p.insert_seen; s.start(); s.text(1, url.str()); s.done(); ++seen;
+        auto& s = *p.insert_seen; s.start(); s.text(1, url.str()); s.done(); ++seen; row_changes += static_cast<std::size_t>(sqlite3_changes(p.db()));
         if (hook) { hook(++applied); } else { ++applied; }
     }
     std::unordered_set<Url> changed;
@@ -207,6 +208,7 @@ void SqliteStore::apply_with_hook(const CrawlMutationBatch& batch, const std::fu
         } else {
             auto& s = *p.delete_work; s.start(); s.text(1, change.url.str()); s.done(); if (exists) { --pending; }
         }
+        row_changes += static_cast<std::size_t>(sqlite3_changes(p.db()));
         if (hook) { hook(++applied); } else { ++applied; }
     }
     for (const auto& url : new_urls) { require(changed.contains(url), "discovery lacks unfinished/terminal mutation"); }
@@ -218,7 +220,7 @@ void SqliteStore::apply_with_hook(const CrawlMutationBatch& batch, const std::fu
     transaction.commit();
     p.metadata = std::move(next_metadata); p.seen_count = seen; p.work_count = pending; p.active_count = active;
     const auto elapsed = Clock::now() - began;
-    ++p.stats.transactions; p.stats.mutations += batch.operations; p.stats.row_changes += applied;
+    ++p.stats.transactions; p.stats.mutations += batch.operations; p.stats.row_changes += row_changes + 2;
     p.stats.commit_time += elapsed; p.stats.max_commit_time = std::max(p.stats.max_commit_time, elapsed);
 }
 CrawlCheckpoint SqliteStore::load()

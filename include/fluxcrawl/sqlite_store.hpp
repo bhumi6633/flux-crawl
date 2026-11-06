@@ -10,6 +10,7 @@ struct StoreLoadTimings {
 class SqliteStore final : public CrawlStore {
 public:
     static constexpr int schema_version = 1;
+    [[nodiscard]] static std::string library_version();
     static std::unique_ptr<SqliteStore> create(const std::filesystem::path& path, const CrawlCheckpoint& initial);
     static std::unique_ptr<SqliteStore> open(const std::filesystem::path& path);
     ~SqliteStore() override;
