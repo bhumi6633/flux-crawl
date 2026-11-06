@@ -1,4 +1,6 @@
 #include "checkpoint_cli.hpp"
+#include "persistence_cli.hpp"
+#include <fluxcrawl/sqlite_store.hpp>
 #include <fluxcrawl/checkpoint.hpp>
 #include <fluxcrawl/async_crawler.hpp>
 #include <fluxcrawl/sequential_crawler.hpp>
@@ -11,10 +13,15 @@ int checkpoint_resume_main(int argc, char* argv[])
 {
     try {
         if (argc < 3) { throw std::invalid_argument("Usage: fluxcrawl resume FILE [--engine NAME] [--workers N | --concurrency N]"); }
-        auto saved = std::make_shared<fluxcrawl::CrawlCheckpoint>(fluxcrawl::CheckpointManager::read(argv[2]));
+        const bool database = fluxcrawl::SqliteStore::is_database(argv[2]);
+        auto saved = [&] {
+            if (database) { auto store = fluxcrawl::SqliteStore::open(argv[2]); return std::make_shared<fluxcrawl::CrawlCheckpoint>(store->load()); }
+            return std::make_shared<fluxcrawl::CrawlCheckpoint>(fluxcrawl::CheckpointManager::read(argv[2]));
+        }();
         auto options = saved->options;
         options.resume_from = saved;
-        options.checkpoint.path = argv[2];
+        if (database) { options.sqlite.path = argv[2]; options.sqlite.resume = true; }
+        else { options.checkpoint.path = argv[2]; }
         std::string_view engine = "sequential";
         std::size_t workers = 4, concurrency = 8;
         bool workers_supplied = false, concurrency_supplied = false;
@@ -25,10 +32,10 @@ int checkpoint_resume_main(int argc, char* argv[])
             if (flag == "--engine") {
                 engine = value;
                 if (engine != "sequential" && engine != "threaded" && engine != "async") { throw std::invalid_argument("Invalid resume engine"); }
-            } else if (flag == "--checkpoint") {
+            } else if (flag == "--checkpoint" && !database) {
                 if (value.empty()) { throw std::invalid_argument("Checkpoint path must not be empty"); }
                 options.checkpoint.path = value;
-            } else if (flag == "--workers" || flag == "--concurrency" || flag == "--checkpoint-every" || flag == "--stop-after-attempts") {
+            } else if (flag == "--workers" || flag == "--concurrency" || flag == "--checkpoint-every" || flag == "--stop-after-attempts" || flag == "--db-batch-size") {
                 std::size_t n = 0;
                 const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), n);
                 if (value.empty() || error != std::errc{} || end != value.data() + value.size() || (n == 0 && flag != "--stop-after-attempts")) {
@@ -36,14 +43,16 @@ int checkpoint_resume_main(int argc, char* argv[])
                 }
                 if (flag == "--workers") { workers = n; workers_supplied = true; }
                 else if (flag == "--concurrency") { concurrency = n; concurrency_supplied = true; }
-                else if (flag == "--checkpoint-every") { options.checkpoint.every = n; }
+                else if (flag == "--checkpoint-every" && !database) { options.checkpoint.every = n; }
+                else if (flag == "--db-batch-size" && database) { options.sqlite.batch_size = n; }
+                else if (flag != "--stop-after-attempts") { throw std::invalid_argument("Persistence controls must match the resumed backend"); }
                 else { options.checkpoint.stop_after_attempts = n; }
             } else { throw std::invalid_argument("Resume permits execution options only; semantic configuration is stored in the checkpoint"); }
         }
         if ((workers_supplied && engine != "threaded") || (concurrency_supplied && engine != "async")) {
             throw std::invalid_argument("Workers require threaded engine; concurrency requires async engine");
         }
-        if (saved->completed) { std::cout << "Checkpoint already completed; no requests issued.\n"; return 0; }
+        if (saved->completed) { std::cout << (database ? "Crawl database already completed; no requests issued.\n" : "Checkpoint already completed; no requests issued.\n"); return 0; }
         if (saved->counters.pages_attempted == options.max_pages) {
             std::cout << "Checkpoint has no remaining page-attempt budget; no requests issued.\n"; return 0;
         }
@@ -60,7 +69,8 @@ int checkpoint_resume_main(int argc, char* argv[])
             << "\nRobots fetches: " << result.robots_fetches << "\nCheckpoints written: " << result.checkpoints_written
             << "\nCheckpoint bytes: " << result.checkpoint_bytes
             << "\nCheckpoint I/O time ms: " << std::chrono::duration<double, std::milli>(result.checkpoint_time).count() << '\n';
-        return result.checkpoint_errors.empty() && result.robots_fetch_failures == 0 && result.terminal_fetch_failures == 0
+        if (database) { fluxcrawl::detail::print_database_metrics(std::cout, result); }
+        return result.persistence_errors.empty() && result.checkpoint_errors.empty() && result.robots_fetch_failures == 0 && result.terminal_fetch_failures == 0
             && (options.retry.max_retries == 0 || result.terminal_http_failures == 0) ? 0 : 1;
     } catch (const std::exception& error) { std::cerr << "fluxcrawl resume: " << error.what() << '\n'; return 1; }
 }

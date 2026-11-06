@@ -1,5 +1,6 @@
 #include "benchmark_cli.hpp"
 #include "checkpoint_cli.hpp"
+#include "persistence_cli.hpp"
 #include <fluxcrawl/version.hpp>
 #include <fluxcrawl/url.hpp>
 #include <fluxcrawl/sequential_crawler.hpp>
@@ -26,6 +27,8 @@ void print_help()
                  "  fluxcrawl resume FILE [execution options]\n"
                  "  fluxcrawl benchmark --help\n\n"
                  "Options:\n"
+                 "  --state-db FILE       New SQLite crawl database (must not exist)\n"
+                 "  --db-batch-size N     Logical mutations per batch (default: 100)\n"
                  "  --checkpoint FILE      Atomic snapshot output (default: disabled)\n"
                  "  --checkpoint-every N   Resource attempts between snapshots (default: 100)\n"
                  "  --stop-after-attempts N Graceful stop at cumulative attempts; requires checkpoint\n"
@@ -55,7 +58,7 @@ int main(int argc, char* argv[])
     if (argc > 1 && std::string_view{argv[1]} == "benchmark") { return benchmark_main(argc, argv); }
     if (argc > 1 && std::string_view{argv[1]} == "resume") { return checkpoint_resume_main(argc, argv); }
     bool show_help = false;
-    bool checkpoint_interval_supplied = false;
+    bool checkpoint_interval_supplied = false, db_batch_supplied = false;
     bool show_version = false;
     std::string_view seed;
     fluxcrawl::CrawlOptions options;
@@ -73,21 +76,23 @@ int main(int argc, char* argv[])
             show_help = true;
         } else if (argument == "--version") {
             show_version = true;
-        } else if (argument == "--checkpoint") {
+        } else if (argument == "--checkpoint" || argument == "--state-db") {
             if (index + 1 >= argc || std::string_view{argv[index + 1]}.empty()) {
                 std::cerr << "fluxcrawl: --checkpoint requires a path.\n"; return 1;
             }
-            options.checkpoint.path = argv[++index];
-        } else if (argument == "--checkpoint-every" || argument == "--stop-after-attempts") {
+            if (argument == "--state-db") { options.sqlite.path = argv[++index]; }
+            else { options.checkpoint.path = argv[++index]; }
+        } else if (argument == "--checkpoint-every" || argument == "--stop-after-attempts" || argument == "--db-batch-size") {
             if (index + 1 >= argc) { std::cerr << "fluxcrawl: missing checkpoint integer.\n"; return 1; }
             const std::string_view value{argv[++index]};
             std::size_t n = 0;
             const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), n);
             if (value.empty() || error != std::errc{} || end != value.data() + value.size()
-                || (n == 0 && argument == "--checkpoint-every")) {
+                || (n == 0 && argument != "--stop-after-attempts")) {
                 std::cerr << "fluxcrawl: invalid checkpoint integer.\n"; return 1;
             }
             if (argument == "--checkpoint-every") { options.checkpoint.every = n; checkpoint_interval_supplied = true; }
+            else if (argument == "--db-batch-size") { options.sqlite.batch_size = n; db_batch_supplied = true; }
             else { options.checkpoint.stop_after_attempts = n; }
         } else if (argument == "--same-host") {
             options.same_host_only = true;
@@ -180,8 +185,11 @@ int main(int argc, char* argv[])
         }
     }
 
-    if ((checkpoint_interval_supplied || options.checkpoint.stop_after_attempts) && options.checkpoint.path.empty()) {
-        std::cerr << "fluxcrawl: checkpoint interval/stop requires --checkpoint FILE.\n"; return 1;
+    if ((!options.sqlite.path.empty() && !options.checkpoint.path.empty())
+        || (checkpoint_interval_supplied && options.checkpoint.path.empty())
+        || (db_batch_supplied && options.sqlite.path.empty())
+        || (options.checkpoint.stop_after_attempts && options.checkpoint.path.empty() && options.sqlite.path.empty())) {
+        std::cerr << "fluxcrawl: choose one persistence backend; cadence/batch/stop options require their backend.\n"; return 1;
     }
     if (burst_supplied && !options.scheduling.rate) {
         std::cerr << "fluxcrawl: --burst-per-host requires --rate-per-host.\n";
@@ -264,7 +272,8 @@ int main(int argc, char* argv[])
                     << "\nCheckpoint bytes: " << result.checkpoint_bytes
                     << "\nCheckpoint I/O time ms: " << std::chrono::duration<double, std::milli>(result.checkpoint_time).count() << '\n';
             }
-            return result.checkpoint_errors.empty() && result.robots_fetch_failures == 0 && result.terminal_fetch_failures == 0
+            if (!options.sqlite.path.empty()) { fluxcrawl::detail::print_database_metrics(std::cout, result); }
+            return result.persistence_errors.empty() && result.checkpoint_errors.empty() && result.robots_fetch_failures == 0 && result.terminal_fetch_failures == 0
                 && (options.retry.max_retries == 0 || result.terminal_http_failures == 0) ? 0 : 1;
         } catch (const std::exception& error) {
             std::cerr << "fluxcrawl: " << error.what() << '\n';
