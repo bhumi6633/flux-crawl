@@ -29,6 +29,10 @@ void print_help()
                  "Options:\n"
                  "  --state-db FILE       New SQLite crawl database (must not exist)\n"
                  "  --db-batch-size N     Logical mutations per batch (default: 100)\n"
+                 "  --dedup MODE          memory (default), sqlite or bloom-sqlite\n"
+                 "  --bloom-expected N    Design capacity (default: 1000000)\n"
+                 "  --bloom-fp-rate P     Target probability (default: 0.01)\n"
+                 "  --seen-reserve N      Reserve MemoryExact capacity\n"
                  "  --pending-high-watermark N  Admission capacity (default: 10000)\n"
                  "  --pending-low-watermark N   Resume admission at this level (default: 7500)\n"
                  "  --unbounded-pending     Disable queue admission control\n"
@@ -61,6 +65,7 @@ int main(int argc, char* argv[])
     if (argc > 1 && std::string_view{argv[1]} == "benchmark") { return benchmark_main(argc, argv); }
     if (argc > 1 && std::string_view{argv[1]} == "resume") { return checkpoint_resume_main(argc, argv); }
     bool show_help = false;
+    bool bloom_supplied = false;
     bool pending_high_supplied = false, pending_low_supplied = false, pressure_disabled = false;
     bool checkpoint_interval_supplied = false, db_batch_supplied = false;
     bool show_version = false;
@@ -80,6 +85,23 @@ int main(int argc, char* argv[])
             show_help = true;
         } else if (argument == "--version") {
             show_version = true;
+        } else if (argument == "--dedup") {
+            if (index+1>=argc) { std::cerr<<"fluxcrawl: --dedup needs memory, sqlite or bloom-sqlite.\n";return 1; }
+            const std::string_view mode{argv[++index]};
+            if(mode=="memory") {options.dedup.mode=fluxcrawl::DedupMode::Memory;}
+            else if(mode=="sqlite") {options.dedup.mode=fluxcrawl::DedupMode::Sqlite;}
+            else if(mode=="bloom-sqlite") {options.dedup.mode=fluxcrawl::DedupMode::BloomSqlite;}
+            else {std::cerr<<"fluxcrawl: unsupported dedup mode.\n";return 1;}
+        } else if(argument=="--bloom-expected" || argument=="--seen-reserve") {
+            if(index+1>=argc) {std::cerr<<"fluxcrawl: missing dedup count.\n";return 1;}
+            const std::string_view value{argv[++index]};std::size_t n=0;const auto [end,error]=std::from_chars(value.data(),value.data()+value.size(),n);
+            if(value.empty()||error!=std::errc{}||end!=value.data()+value.size()||n==0){std::cerr<<"fluxcrawl: positive dedup count required.\n";return 1;}
+            if(argument=="--bloom-expected"){options.dedup.expected_elements=n;bloom_supplied=true;}else{options.dedup.memory_reserve=n;}
+        } else if(argument=="--bloom-fp-rate") {
+            if(index+1>=argc){std::cerr<<"fluxcrawl: missing Bloom probability.\n";return 1;}
+            const std::string value{argv[++index]};double probability=0;std::istringstream input{value};input.imbue(std::locale::classic());
+            if(value.empty() || !(input>>probability) || !(input>>std::ws).eof()){std::cerr<<"fluxcrawl: invalid Bloom probability.\n";return 1;}
+            options.dedup.false_positive_rate=probability;bloom_supplied=true;
         } else if (argument == "--unbounded-pending") {
             pressure_disabled = true; options.backpressure.enabled = false;
         } else if (argument == "--pending-high-watermark" || argument == "--pending-low-watermark") {
@@ -200,6 +222,10 @@ int main(int argc, char* argv[])
         }
     }
 
+    try { options.dedup.validate(); } catch(const std::exception& error) {std::cerr<<"fluxcrawl: "<<error.what()<<'\n';return 1;}
+    if((bloom_supplied && options.dedup.mode!=fluxcrawl::DedupMode::BloomSqlite) || (options.dedup.mode!=fluxcrawl::DedupMode::Memory && options.sqlite.path.empty())) {
+        std::cerr<<"fluxcrawl: Bloom options require bloom-sqlite; SQLite dedup requires --state-db.\n";return 1;
+    }
     if (pressure_disabled && (pending_high_supplied || pending_low_supplied)) { std::cerr << "fluxcrawl: unbounded pending conflicts with watermarks.\n"; return 1; }
     if (pending_high_supplied && !pending_low_supplied) { options.backpressure.low_watermark = options.backpressure.high_watermark - (options.backpressure.high_watermark / 4) - (options.backpressure.high_watermark % 4 != 0); }
     try { options.backpressure.validate(); } catch (const std::exception& error) { std::cerr << "fluxcrawl: " << error.what() << '\n'; return 1; }
@@ -285,6 +311,7 @@ int main(int argc, char* argv[])
                     << "\nTerminal HTTP failures: " << result.terminal_http_failures
                     << "\nTerminal fetch failures: " << result.terminal_fetch_failures << '\n';
             }
+            if (result.pages_attempted != 0) { fluxcrawl::detail::print_dedup_metrics(std::cout, result, options.dedup); }
             if (result.pages_attempted != 0) { fluxcrawl::detail::print_pressure_metrics(std::cout, result, options.backpressure); }
             if (!options.checkpoint.path.empty()) {
                 std::cout << "Checkpoints written: " << result.checkpoints_written

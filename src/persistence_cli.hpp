@@ -2,6 +2,25 @@
 #include <fluxcrawl/crawl_types.hpp>
 #include <ostream>
 namespace fluxcrawl::detail {
+inline void print_dedup_metrics(std::ostream& out,const CrawlResult& result,const DedupOptions& options)
+{
+    const auto& d=result.dedup;
+    out<<"Dedup backend: "<<dedup_name(options.mode)<<"\nDedup membership queries: "<<d.queries
+       <<"\nDedup lookup time ms: "<<std::chrono::duration<double,std::milli>(d.lookup_time).count()
+       <<"\nDedup insert time ms: "<<std::chrono::duration<double,std::milli>(d.insert_time).count()
+       <<"\nExact DB checks: "<<d.exact_db_queries<<"\nConfirmed duplicates: "<<d.confirmed_duplicates
+       <<"\nUncommitted seen cache peak: "<<d.pending_cache_peak<<"\nUncommitted seen cache remaining: "<<d.pending_cache_size<<'\n';
+    if(options.mode==DedupMode::BloomSqlite) {
+        out<<"Bloom expected elements: "<<options.expected_elements<<"\nBloom target FP rate: "<<options.false_positive_rate
+           <<"\nBloom bytes: "<<d.bloom_bytes<<"\nBloom bits: "<<d.bloom_bits<<"\nBloom probes: "<<d.bloom_probes
+           <<"\nBloom insertions: "<<d.bloom_insertions<<"\nBloom occupancy: "<<(d.bloom_bits?double(d.bloom_set_bits)/double(d.bloom_bits):0)
+           <<"\nBloom queries: "<<d.bloom_queries<<"\nBloom definite misses: "<<d.bloom_definite_misses
+           <<"\nBloom maybe hits: "<<d.bloom_maybe_hits<<"\nExact checks after Bloom: "<<d.exact_checks_after_bloom
+           <<"\nBloom false positives: "<<d.bloom_false_positives
+           <<"\nBloom rebuild time ms: "<<std::chrono::duration<double,std::milli>(d.rebuild_time).count()
+           <<"\nBloom capacity exceeded: "<<(d.bloom_insertions>options.expected_elements?"yes":"no")<<'\n';
+    }
+}
 inline void print_pressure_metrics(std::ostream& out, const CrawlResult& result, const BackpressureOptions& options)
 {
     const auto& p = result.pressure;
