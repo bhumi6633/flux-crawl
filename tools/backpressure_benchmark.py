@@ -12,7 +12,7 @@ import tempfile
 import time
 from backpressure_fixture import FanoutFixture
 
-def trial(binary, engine, high, low, persistent, branches, leaves, retries, robots, budget=None):
+def trial(binary, engine, high, low, persistent, branches, leaves, retries, robots, budget=None, dedup="memory", bloom_expected=None, bloom_fp=.01):
     with tempfile.TemporaryDirectory() as tmp, FanoutFixture(branches,leaves,retry_every=retries) as site:
         db=Path(tmp)/'crawl.db'
         command=[str(binary),'--engine',engine,'--depth','2','--max-pages',str(budget if budget is not None else site.total+((branches*leaves+retries-1)//retries if retries else 0)),'--max-per-host','4']
@@ -21,6 +21,8 @@ def trial(binary, engine, high, low, persistent, branches, leaves, retries, robo
         if persistent:command+=['--state-db',str(db),'--db-batch-size','100']
         if robots:command+=['--respect-robots']
         if retries:command+=['--max-retries','1','--retry-backoff-ms','5','--retry-max-backoff-ms','5','--no-retry-jitter']
+        command+=['--dedup',dedup]
+        if dedup=='bloom-sqlite':command+=['--bloom-expected',str(bloom_expected or site.total),'--bloom-fp-rate',str(bloom_fp)]
         command+=[site.url()]
         # External process RSS, no platform-specific production instrumentation.
         measured=platform.system()=='Darwin' and Path('/usr/bin/time').exists()
@@ -58,11 +60,13 @@ def trial(binary, engine, high, low, persistent, branches, leaves, retries, robo
                     assert 'completed 1\n' in c.execute("SELECT value FROM crawl_meta WHERE key='payload'").fetchone()[0]
             assert int(summary['SQLite peak queued batches'])<=(8 if engine=='threaded' else 1)
             assert int(summary['SQLite peak buffered mutations'])<4096 if high is not None else True
-        row=dict(scenario='high-fanout-backpressure',engine=engine,branches=branches,leaves_per_branch=leaves,logical_urls=site.total,
+        row=dict(dedup_backend=dedup,bloom_expected=bloom_expected or site.total,bloom_target_fp=bloom_fp,scenario='high-fanout-backpressure',engine=engine,branches=branches,leaves_per_branch=leaves,logical_urls=site.total,
                  pending_high=high or 0,pending_low=low if high else 0,persistence_mode='sqlite' if persistent else 'none',batch_size=100 if persistent else 0,
                  http_protocol='HTTP/1.1',concurrency=1 if engine=='sequential' else 8,max_per_host=4,retry_every=retries,respect_robots=robots,
                  attempt_budget=budget or 'full',elapsed_ms=elapsed*1000,requests_per_second=int(summary['Pages attempted'])/elapsed,peak_rss_bytes=rss)
         for label,key in [('Peak pending URLs','peak_pending'),('Peak admitted unfinished','peak_unfinished'),('Peak seen URLs','peak_seen'),('Peak deferred discoveries','peak_deferred'),('Backpressure activations','activations'),('Time under pressure ms','pressure_ms'),('Deferred spool I/O time ms','deferred_io_ms'),('SQLite commit time ms','commit_ms'),('SQLite peak buffered mutations','buffered_mutations_peak'),('SQLite peak queued batches','queued_batches_peak')]:
+            row[key]=float(summary.get(label,0))
+        for label,key in [('Dedup lookup time ms','dedup_lookup_ms'),('Dedup insert time ms','dedup_insert_ms'),('Dedup membership queries','dedup_queries'),('Exact DB checks','exact_db_queries'),('Bloom queries','bloom_queries'),('Bloom false positives','bloom_false_positives'),('Bloom definite misses','bloom_definite_misses'),('Bloom maybe hits','bloom_maybe_hits'),('Bloom bytes','bloom_bytes'),('Uncommitted seen cache peak','seen_cache_peak')]:
             row[key]=float(summary.get(label,0))
         row['database_bytes']=db.stat().st_size if persistent else 0
         return row,p.stdout
