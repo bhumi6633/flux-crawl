@@ -19,7 +19,7 @@ namespace {
 class Coordinator {
 public:
     Coordinator(const Url& seed, const CrawlOptions& options, std::size_t workers, const HttpClientOptions& http)
-        : seed_{seed}, options_{options}, state_{seed, options.max_depth, options.backpressure}, scheduler_{workers, options.scheduling, detail::persistence_enabled(options), bool(options.resume_from)}, policy_{options.respect_robots}, checkpoints_{seed, options, http}
+        : seed_{seed}, options_{options}, state_{seed, options.max_depth, options.backpressure, options.dedup}, scheduler_{workers, options.scheduling, detail::persistence_enabled(options), bool(options.resume_from)}, policy_{options.respect_robots}, checkpoints_{seed, options, http}
     { checkpoints_.initialize(state_, scheduler_, policy_, result_); }
 
     std::optional<HostScheduler::Lease> acquire(WorkerProfile* profile)
@@ -108,6 +108,7 @@ public:
             detail::PersistenceRuntime::report(result_, checkpoints_.write(*snapshot));
         }
         result_.pressure = state_.pressure_metrics();
+        result_.dedup = state_.dedup_metrics();
         return std::move(result_);
     }
 
@@ -157,7 +158,7 @@ CrawlResult ThreadPoolCrawler::crawl(const Url& seed, const CrawlOptions& option
     if (options.max_pages == 0) {
         auto result = coordinator.finish();
         if (profile) { result.profile.emplace(); result.profile->threaded = std::move(profile); }
-        result.elapsed = std::chrono::steady_clock::now() - started;
+    result.elapsed = std::chrono::steady_clock::now() - started;
         return result;
     }
     if (profile) { profile->workers.resize(workers_); }

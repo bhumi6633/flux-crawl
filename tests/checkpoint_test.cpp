@@ -42,8 +42,8 @@ int main(int argc, char** argv)
         check(loaded.unfinished[1].item.depth == 3 && loaded.unfinished[1].item.retry_count == 2, "depth/retry preservation");
         check(loaded.http.user_agent == c.http.user_agent, "quoted escaping round trip");
         check(loaded.unfinished[2].was_active && loaded.counters.pages_attempted == 4, "active recovery and budget persisted");
-        rejects([&] { auto bad = c; bad.format_version = 3; (void)CheckpointManager::serialize(bad); });
-        for (auto mutation : {std::string{"FLUXCRAWL_CHECKPOINT 3\n"}, text.substr(0, text.size() / 2), text + "junk", std::string{"nonsense"}}) {
+        rejects([&] { auto bad = c; bad.format_version = 4; (void)CheckpointManager::serialize(bad); });
+        for (auto mutation : {std::string{"FLUXCRAWL_CHECKPOINT 4\n"}, text.substr(0, text.size() / 2), text + "junk", std::string{"nonsense"}}) {
             rejects([&] { (void)CheckpointManager::deserialize(mutation); });
         }
         auto replace = [&](const std::string& from, const std::string& to) {

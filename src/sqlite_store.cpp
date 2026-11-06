@@ -1,6 +1,8 @@
 #include <fluxcrawl/sqlite_store.hpp>
 #include <sqlite3.h>
 #include <algorithm>
+#include <mutex>
+#include <atomic>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -81,10 +83,12 @@ std::size_t checked_size(std::uint64_t value) { require(value <= std::numeric_li
 void increment(std::size_t& value, std::size_t extra) { require(extra <= std::numeric_limits<std::size_t>::max() - value, "counter overflow"); value += extra; }
 }
 struct SqliteStore::Impl {
+    mutable std::mutex mutex;
+    std::atomic<std::uint64_t> committed{0};
     std::filesystem::path path;
     Ownership owner;
     Connection connection;
-    std::unique_ptr<Statement> insert_seen, upsert_work, delete_work, select_work, set_meta;
+    std::unique_ptr<Statement> insert_seen, upsert_work, delete_work, select_work, set_meta, lookup_seen;
     std::optional<CrawlCheckpoint> metadata;
     std::size_t seen_count = 0, work_count = 0, active_count = 0;
     bool validated = false;
@@ -102,6 +106,7 @@ struct SqliteStore::Impl {
 #endif
     }
     void prepare() {
+        lookup_seen = std::make_unique<Statement>(db(), "SELECT 1 FROM seen_urls WHERE url=?1");
         insert_seen = std::make_unique<Statement>(db(), "INSERT INTO seen_urls(url) VALUES(?1)");
         upsert_work = std::make_unique<Statement>(db(), "INSERT INTO unfinished(url,depth,retry_count,recovery,state,eligible_ms,queue_order) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(url) DO UPDATE SET depth=excluded.depth,retry_count=excluded.retry_count,recovery=excluded.recovery,state=excluded.state,eligible_ms=excluded.eligible_ms,queue_order=excluded.queue_order");
         delete_work = std::make_unique<Statement>(db(), "DELETE FROM unfinished WHERE url=?1");
@@ -156,7 +161,7 @@ std::unique_ptr<SqliteStore> SqliteStore::create(const std::filesystem::path& pa
         metadata.counters.attempts_unresolved -= active;
         impl->meta("schema_version", "1"); impl->meta("payload", CheckpointManager::serialize_metadata(metadata)); impl->meta("active_robots", "0");
         transaction.commit(); impl->metadata = std::move(metadata);
-        impl->seen_count = initial.seen.size(); impl->work_count = initial.unfinished.size(); impl->active_count = active; impl->validated = true;
+        impl->seen_count = initial.seen.size(); impl->work_count = initial.unfinished.size(); impl->active_count = active; impl->validated = true; impl->committed.store(initial.sequence);
         impl->stats.initialization_time = Clock::now() - began;
         return std::unique_ptr<SqliteStore>{new SqliteStore{std::move(impl)}};
     } catch (...) { std::error_code ignored; std::filesystem::remove(path, ignored); throw; }
@@ -175,8 +180,8 @@ std::unique_ptr<SqliteStore> SqliteStore::open(const std::filesystem::path& path
 void SqliteStore::apply(const CrawlMutationBatch& batch) { apply_with_hook(batch, {}); }
 void SqliteStore::apply_with_hook(const CrawlMutationBatch& batch, const std::function<void(std::size_t)>& hook)
 {
-    auto& p = *impl_;
-    if (!p.validated) { (void)load(); }
+    auto& p = *impl_; std::unique_lock lock{p.mutex};
+    if (!p.validated) { lock.unlock(); (void)load(); lock.lock(); }
     require(batch.metadata.sequence == p.metadata->sequence + 1, "out-of-order/repeated transaction sequence");
     require(batch.metadata.seed == p.metadata->seed && CheckpointManager::same_semantics(batch.metadata.options, p.metadata->options)
         && batch.metadata.http.user_agent == p.metadata->http.user_agent
@@ -223,15 +228,24 @@ void SqliteStore::apply_with_hook(const CrawlMutationBatch& batch, const std::fu
     p.metadata = std::move(next_metadata); p.seen_count = seen; p.work_count = pending; p.active_count = active;
     const auto elapsed = Clock::now() - began;
     ++p.stats.transactions; p.stats.mutations += batch.operations; p.stats.row_changes += row_changes + 2;
+    p.committed.store(batch.metadata.sequence);
     p.stats.commit_time += elapsed; p.stats.max_commit_time = std::max(p.stats.max_commit_time, elapsed);
 }
 CrawlCheckpoint SqliteStore::load()
 {
-    auto& p = *impl_; Transaction transaction{p.db()};
+    auto& p = *impl_; std::lock_guard lock{p.mutex}; Transaction transaction{p.db()};
     auto c = CheckpointManager::deserialize_metadata(p.meta("payload"));
     auto began = Clock::now();
     Statement seen{p.db(), "SELECT url FROM seen_urls ORDER BY url"};
-    while (seen.row()) { c.seen.push_back(canonical(seen.string(0))); }
+    std::size_t seen_count=0; bool seed_found=false;
+    const bool external=c.options.dedup.mode!=DedupMode::Memory;
+    while (seen.row()) {
+        auto url=canonical(seen.string(0)); ++seen_count; seed_found=seed_found || url==c.seed;
+        require(!c.options.same_host_only || url.host()==c.seed.host(),"seen URL violates same-host policy");
+        if(!external) { c.seen.push_back(std::move(url)); }
+    }
+    require(seed_found,"seed missing from exact storage");
+    if(external) { c.external_seen_count=seen_count; }
     p.timings.seen = Clock::now() - began; began = Clock::now();
     Statement work{p.db(), "SELECT url,depth,retry_count,recovery,state,eligible_ms,queue_order FROM unfinished ORDER BY queue_order,url"};
     std::size_t active = 0;
@@ -254,18 +268,23 @@ CrawlCheckpoint SqliteStore::load()
     auto metadata = CheckpointManager::metadata_only(c);
     p.timings.validation = Clock::now() - began; transaction.commit();
     p.metadata = std::move(metadata); p.metadata->counters.attempts_unresolved -= active; p.metadata->counters.robots_attempts_unresolved -= checked_size(active_robots);
-    p.seen_count = c.seen.size(); p.work_count = c.unfinished.size(); p.active_count = active; p.validated = true;
+    p.seen_count = seen_count; p.work_count = c.unfinished.size(); p.active_count = active; p.validated = true; p.committed.store(c.sequence);
     return c;
 }
 PersistenceMetrics SqliteStore::metrics() const
 {
+    std::lock_guard lock{impl_->mutex};
     auto stats = impl_->stats;
     for (const auto& file : {impl_->path, std::filesystem::path{impl_->path.string() + "-wal"}}) {
         std::error_code error; const auto size = std::filesystem::file_size(file, error); if (!error) { stats.file_bytes += static_cast<std::size_t>(size); }
     }
     return stats;
 }
-StoreLoadTimings SqliteStore::load_timings() const { return impl_->timings; }
+StoreLoadTimings SqliteStore::load_timings() const { std::lock_guard lock{impl_->mutex}; return impl_->timings; }
+std::uint64_t SqliteStore::committed_sequence() const { return impl_->committed.load(); }
+std::size_t SqliteStore::seen_count() const { std::lock_guard lock{impl_->mutex}; return impl_->seen_count; }
+bool SqliteStore::seen_contains(const Url& url) { std::lock_guard lock{impl_->mutex}; auto& s=*impl_->lookup_seen; s.start();s.text(1,url.str()); const bool found=s.row();s.start();return found; }
+void SqliteStore::visit_seen(const std::function<void(const Url&)>& visitor) { std::lock_guard lock{impl_->mutex}; Statement s{impl_->db(),"SELECT url FROM seen_urls"}; while(s.row()){visitor(canonical(s.string(0)));} }
 bool SqliteStore::is_database(const std::filesystem::path& path)
 {
     std::ifstream file{path, std::ios::binary}; char header[16]{}; file.read(header, sizeof(header));

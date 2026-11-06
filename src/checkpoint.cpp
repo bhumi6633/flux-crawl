@@ -63,7 +63,7 @@ CrawlCheckpoint CheckpointManager::metadata_only(const CrawlCheckpoint& source)
     c.options.max_depth = source.options.max_depth; c.options.max_pages = source.options.max_pages;
     c.options.same_host_only = source.options.same_host_only; c.options.respect_robots = source.options.respect_robots;
     c.deferred = source.deferred; c.spool_sync = source.spool_sync;
-    c.options.backpressure = source.options.backpressure;
+    c.options.backpressure = source.options.backpressure; c.options.dedup = source.options.dedup;
     c.options.retry = source.options.retry; c.options.scheduling = source.options.scheduling;
     c.http = source.http; c.sequence = source.sequence; c.completed = source.completed;
     c.counters = copy_counters(source.counters); return c;
@@ -77,14 +77,18 @@ CrawlResult CheckpointManager::copy_counters(const CrawlResult& result)
 bool CheckpointManager::same_semantics(const CrawlOptions& a, const CrawlOptions& b)
 {
     std::ostringstream x, y; x.imbue(std::locale::classic()); y.imbue(std::locale::classic());
-    x << std::setprecision(17); y << std::setprecision(17); options(x, a); options(y, b); return x.str() == y.str() && a.backpressure.enabled == b.backpressure.enabled
+    x << std::setprecision(17); y << std::setprecision(17); options(x, a); options(y, b); return x.str() == y.str()
+        && a.dedup.mode == b.dedup.mode && a.dedup.expected_elements == b.dedup.expected_elements
+        && a.dedup.false_positive_rate == b.dedup.false_positive_rate && a.dedup.memory_reserve == b.dedup.memory_reserve && a.backpressure.enabled == b.backpressure.enabled
         && (!a.backpressure.enabled || (a.backpressure.high_watermark == b.backpressure.high_watermark && a.backpressure.low_watermark == b.backpressure.low_watermark));
 }
 void CheckpointManager::validate(const CrawlCheckpoint& c, std::size_t maximum_seen)
 {
-    require((c.format_version == 1 || c.format_version == CrawlCheckpoint::supported_version), "unsupported format version");
+    require((c.format_version >= 1 && c.format_version <= CrawlCheckpoint::supported_version), "unsupported format version");
     require(c.sequence != std::numeric_limits<std::uint64_t>::max(), "sequence overflow");
     require(c.format_version != 1 || (!c.options.backpressure.enabled && c.deferred.count() == 0), "legacy format cannot store pressure/deferred state");
+    require(c.format_version >= 3 || c.options.dedup.mode == DedupMode::Memory, "legacy payload cannot encode external membership");
+    c.options.dedup.validate();
     c.options.retry.validate(); c.options.backpressure.validate();
     DiscoverySpool::validate(c.deferred, c.options.max_depth, c.options.same_host_only ? std::optional<std::string_view>{c.seed.host()} : std::nullopt);
     require(c.options.backpressure.enabled || c.deferred.count() == 0, "deferred state requires admission control"); (void)HostScheduler{1, c.options.scheduling};
@@ -97,25 +101,27 @@ void CheckpointManager::validate(const CrawlCheckpoint& c, std::size_t maximum_s
     const auto& r = c.counters;
     require(r.pages_attempted <= c.options.max_pages, "attempt budget exceeded");
     require(!c.options.backpressure.enabled || c.unfinished.size() <= c.options.backpressure.high_watermark, "admitted unfinished work exceeds pressure capacity");
-    require(c.seen.size() <= maximum_seen && c.unfinished.size() <= c.seen.size(), "state size invalid");
+    const auto seen_count = c.external_seen_count.value_or(c.seen.size());
+    require(!c.external_seen_count || (c.seen.empty() && c.options.dedup.mode != DedupMode::Memory), "invalid external seen descriptor");
+    require(seen_count <= maximum_seen && c.unfinished.size() <= seen_count, "state size invalid");
     std::unordered_set<Url> seen;
     for (const auto& url : c.seen) {
         require(seen.insert(url).second, "duplicate seen URL");
         require(!c.options.same_host_only || url.host() == c.seed.host(), "seen URL violates same-host policy");
     }
-    require(seen.contains(c.seed), "seed missing from seen");
+    require(c.external_seen_count || seen.contains(c.seed), "seed missing from seen");
     std::unordered_set<Url> pending;
     for (const auto& work : c.unfinished) {
         require(!work.item.policy_request && work.item.depth <= c.options.max_depth
             && work.item.retry_count <= c.options.retry.max_retries, "invalid unfinished metadata");
         require(work.item.url != c.seed || work.item.depth == 0, "seed depth must be zero");
         require(work.item.retry_count <= r.pages_attempted, "retry has no prior attempts");
-        require(seen.contains(work.item.url) && pending.insert(work.item.url).second, "unknown or duplicate unfinished URL");
+        require((c.external_seen_count || seen.contains(work.item.url)) && pending.insert(work.item.url).second, "unknown or duplicate unfinished URL");
         require(!work.eligible_unix_ms || (*work.eligible_unix_ms >= 0 && work.item.retry_count != 0 && !work.was_active), "invalid retry deadline");
     }
-    require(r.urls_discovered == seen.size() && r.urls_pending == c.unfinished.size(), "discovery counters disagree");
+    require(r.urls_discovered == seen_count && r.urls_pending == c.unfinished.size(), "discovery counters disagree");
     // Subtraction checks avoid overflow even for adversarial aggregate values.
-    auto remainder = seen.size();
+    auto remainder = seen_count;
     for (auto value : {r.resources_completed, r.urls_blocked_by_robots, r.robots_resources_reused, r.urls_pending}) {
         require(value <= remainder, "resource accounting disagrees"); remainder -= value;
     }
@@ -151,10 +157,12 @@ std::string CheckpointManager::serialize_metadata(const CrawlCheckpoint& c)
         out << "spool " << std::quoted(c.deferred.directory) << ' ' << c.deferred.extents.size() << ' ' << c.deferred.next_order << '\n';
         for (const auto& e : c.deferred.extents) { out << "extent " << e.depth << ' ' << e.begin << ' ' << e.end << ' ' << e.count << ' ' << e.file_id << ' ' << std::quoted(e.origin) << '\n'; }
     }
+    if (c.format_version >= 3) { out << "dedup " << static_cast<unsigned>(c.options.dedup.mode) << ' ' << c.options.dedup.expected_elements << ' ' << c.options.dedup.false_positive_rate << ' ' << c.options.dedup.memory_reserve << '\n'; }
     return out.str();
 }
 std::string CheckpointManager::serialize(const CrawlCheckpoint& c)
 {
+    require(!c.external_seen_count && c.options.dedup.mode == DedupMode::Memory, "snapshot requires MemoryExact membership");
     validate(c);
     std::ostringstream out; out << serialize_metadata(c);
     auto sorted = c.seen;
@@ -174,7 +182,7 @@ namespace {
 CrawlCheckpoint read_metadata(Reader& r)
 {
     r.key("FLUXCRAWL_CHECKPOINT"); const auto version_number = r.number();
-    require((version_number == 1 || version_number == CrawlCheckpoint::supported_version), "unsupported format version");
+    require((version_number >= 1 && version_number <= CrawlCheckpoint::supported_version), "unsupported format version");
     r.key("application"); auto app = r.string(); r.key("seed"); auto seed = r.url();
     CrawlCheckpoint c{.seed = seed}; c.application_version = app; c.format_version = static_cast<std::uint32_t>(version_number);
     r.key("sequence"); c.sequence = r.number(); r.key("completed"); c.completed = r.boolean();
@@ -194,6 +202,7 @@ CrawlCheckpoint read_metadata(Reader& r)
         r.key("spool"); c.deferred.directory = r.string(); const auto count = r.size(); c.deferred.next_order=r.number(); require(count <= 10000, "too many deferred depth extents");
         for (std::size_t n=0; n<count; ++n) { r.key("extent"); const auto depth=r.size(); const auto begin=r.number(); const auto end=r.number(); const auto entries=r.number(); const auto id=r.number(); const auto origin=r.string(); c.deferred.extents.push_back({depth,begin,end,entries,id,origin}); }
     } else { c.options.backpressure.enabled = false; }
+    if(c.format_version >= 3) { r.key("dedup"); const auto mode=r.number(); require(mode<=2,"unsupported dedup mode"); c.options.dedup.mode=static_cast<DedupMode>(mode); c.options.dedup.expected_elements=r.size(); c.options.dedup.false_positive_rate=r.real(); c.options.dedup.memory_reserve=r.size(); }
     return c;
 }
 }

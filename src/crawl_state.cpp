@@ -4,7 +4,7 @@
 
 namespace fluxcrawl {
 
-CrawlState::CrawlState(Url seed, std::size_t max_depth, BackpressureOptions pressure) : pressure_options_{pressure}, gate_{pressure}, max_depth_{max_depth}
+CrawlState::CrawlState(Url seed, std::size_t max_depth, BackpressureOptions pressure, DedupOptions dedup) : pressure_options_{pressure}, gate_{pressure}, dedup_options_{dedup}, seen_{memory_seen(dedup.mode == DedupMode::Memory ? dedup.memory_reserve : 0)}, max_depth_{max_depth}
 {
     (void)discover(seed, 0);
 }
@@ -24,7 +24,7 @@ bool CrawlState::discover(const Url& url, std::size_t depth)
     if (depth > max_depth_) {
         return false;
     }
-    const auto [entry, inserted] = seen_urls_.insert(url);
+    const bool inserted = seen_->insert_if_absent(url);
     if (!inserted) {
         return false;
     }
@@ -33,7 +33,7 @@ bool CrawlState::discover(const Url& url, std::size_t depth)
         if (sink_) { sink_->discovered({url, depth}); }
     } catch (...) {
         // Allocation failure must not leave a URL marked seen without queued work.
-        seen_urls_.erase(entry);
+        seen_->rollback(url);
         throw;
     }
     return true;
@@ -48,16 +48,18 @@ bool CrawlState::discover_from(const CrawlItem& parent, const Url& url)
     return discover(url, parent.depth + 1);
 }
 
-std::vector<Url> CrawlState::seen_urls() const { return {seen_urls_.begin(), seen_urls_.end()}; }
+std::vector<Url> CrawlState::seen_urls() const { return seen_->export_urls(); }
 void CrawlState::restore_seen(const std::vector<Url>& urls)
 {
     frontier_ = CrawlFrontier{};
-    seen_urls_ = std::unordered_set<Url>{urls.begin(), urls.end()};
+    if (dedup_options_.mode == DedupMode::Memory) { seen_ = memory_seen(std::max(dedup_options_.memory_reserve, urls.size())); for (const auto& url : urls) { (void)seen_->insert_if_absent(url); } }
 }
 bool CrawlState::has_seen(const Url& url) const
 {
-    return seen_urls_.contains(url);
+    return seen_->contains(url);
 }
+
+void CrawlState::configure_seen(std::unique_ptr<SeenSet> seen) { seen_ = std::move(seen); }
 
 void CrawlState::configure_spool(const std::filesystem::path& prefix, bool persistent)
 {
@@ -65,7 +67,7 @@ void CrawlState::configure_spool(const std::filesystem::path& prefix, bool persi
 }
 void CrawlState::defer(const Url& url, std::size_t depth)
 {
-    if (depth > max_depth_ || has_seen(url)) { return; }
+    if (depth > max_depth_ || (dedup_options_.mode == DedupMode::Memory && has_seen(url))) { return; }
     if (!spool_) { (void)discover(url, depth); return; }
     spool_->append({url, depth});
     metrics_.deferred_urls = spool_->size(); metrics_.peak_deferred = std::max(metrics_.peak_deferred, metrics_.deferred_urls);

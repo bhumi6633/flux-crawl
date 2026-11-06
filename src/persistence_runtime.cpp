@@ -8,6 +8,10 @@ PersistenceRuntime::PersistenceRuntime(const Url& seed, const CrawlOptions& opti
       mode_{!options.sqlite.path.empty() ? PersistenceMode::Sqlite : checkpointing(options) ? PersistenceMode::Snapshot : PersistenceMode::None},
       sequence_{options.resume_from ? options.resume_from->sequence : 0}
 {
+    options.dedup.validate();
+    if (options.dedup.mode != DedupMode::Memory && (mode_ != PersistenceMode::Sqlite || checkpointing(options))) {
+        throw std::invalid_argument("SQLite dedup requires --state-db and cannot use snapshots");
+    }
     if (mode_ == PersistenceMode::Sqlite) {
         if (checkpointing(options)) { throw std::invalid_argument("Choose one persistence backend: snapshot or SQLite"); }
         if (options.sqlite.batch_size == 0) { throw std::invalid_argument("SQLite batch size must be positive"); }
@@ -21,16 +25,19 @@ void PersistenceRuntime::initialize(CrawlState& state, HostScheduler& scheduler,
     state.configure_spool(prefix, mode_ != PersistenceMode::None);
     if (mode_ != PersistenceMode::Sqlite) { restore_session(seed_, options_, http_, state, scheduler, policy, result); return; }
     if (options_.sqlite.resume) {
-        auto opened = SqliteStore::open(options_.sqlite.path);
-        const auto loaded = opened->load();
-        if (loaded.sequence != options_.resume_from->sequence || loaded.seed != seed_) { throw std::runtime_error("Database changed since resume model was loaded"); }
-        store_ = std::move(opened);
+        if (options_.resume_from->opened_store) { store_=options_.resume_from->opened_store; }
+        else {
+            auto opened=SqliteStore::open(options_.sqlite.path); const auto loaded=opened->load();
+            if(loaded.sequence!=options_.resume_from->sequence || loaded.seed!=seed_) { throw std::runtime_error("Database changed since resume model was loaded"); }
+            store_=std::move(opened);
+        }
     } else {
         CrawlCheckpoint initial{.seed = seed_}; initial.options = options_; initial.http = http_;
         initial.seen = {seed_}; initial.unfinished = {{{seed_, 0}, {}, false}};
         initial.counters.urls_discovered = initial.counters.urls_pending = 1;
         store_ = SqliteStore::create(options_.sqlite.path, initial);
     }
+    if(options_.dedup.mode!=DedupMode::Memory) { state.configure_seen(sqlite_seen(store_,options_.dedup)); }
     state.set_mutation_sink(&journal_); scheduler.set_mutation_sink(&journal_);
     restore_session(seed_, options_, http_, state, scheduler, policy, result);
     // Rewrite unfinished states once on startup: former active rows become ready,
@@ -39,7 +46,7 @@ void PersistenceRuntime::initialize(CrawlState& state, HostScheduler& scheduler,
     for (const auto& work : pending) { journal_.work(work.item, work.eligible_at, false); }
     result.persistence.initialization_time = store_->metrics().initialization_time;
 }
-std::optional<PersistenceRuntime::Request> PersistenceRuntime::capture(const CrawlState& state, const HostScheduler& scheduler,
+std::optional<PersistenceRuntime::Request> PersistenceRuntime::capture(CrawlState& state, const HostScheduler& scheduler,
                                                                       const CrawlPolicy& policy, const CrawlResult& result, bool final)
 {
     if (mode_ != PersistenceMode::Sqlite) {
@@ -61,6 +68,7 @@ std::optional<PersistenceRuntime::Request> PersistenceRuntime::capture(const Cra
     auto batch = std::make_shared<CrawlMutationBatch>(journal_.batch(std::move(metadata), scheduler.active() - journal_.active()));
     std::size_t queued = 0;
     { std::lock_guard lock{queue_mutex_}; queue_.push_back(batch); queued = queue_.size(); }
+    state.captured(sequence_ + 1, batch->discoveries);
     ++sequence_; journal_.clear(); // Only detach after the ordered queue owns the complete batch.
     return Request{{}, true, final, batch->operations, queued};
 }

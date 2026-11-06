@@ -14,6 +14,10 @@ public:
     static std::unique_ptr<SqliteStore> create(const std::filesystem::path& path, const CrawlCheckpoint& initial);
     static std::unique_ptr<SqliteStore> open(const std::filesystem::path& path);
     ~SqliteStore() override;
+    bool seen_contains(const Url& url);
+    std::size_t seen_count() const;
+    std::uint64_t committed_sequence() const;
+    void visit_seen(const std::function<void(const Url&)>& visitor);
     void apply(const CrawlMutationBatch& batch) override;
     // Fail after a prepared mutation, before COMMIT; used for atomicity tests.
     void apply_with_hook(const CrawlMutationBatch& batch, const std::function<void(std::size_t)>& hook);

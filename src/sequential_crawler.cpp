@@ -17,7 +17,7 @@ CrawlResult SequentialCrawler::crawl(const Url& seed, const CrawlOptions& option
 {
     options.retry.validate(); options.backpressure.validate();
     const auto started = std::chrono::steady_clock::now();
-    CrawlState state{seed, options.max_depth, options.backpressure};
+    CrawlState state{seed, options.max_depth, options.backpressure, options.dedup};
     HostScheduler scheduler{1, options.scheduling, detail::persistence_enabled(options), bool(options.resume_from)};
     CrawlPolicy policy{options.respect_robots};
     CrawlResult result;
@@ -57,6 +57,7 @@ CrawlResult SequentialCrawler::crawl(const Url& seed, const CrawlOptions& option
         detail::PersistenceRuntime::report(result, checkpoints.write(*snapshot));
     }
     result.pressure = state.pressure_metrics();
+    result.dedup = state.dedup_metrics();
     result.elapsed = std::chrono::steady_clock::now() - started;
     return result;
 }

@@ -6,13 +6,14 @@
 #include <functional>
 #include <string_view>
 namespace fluxcrawl {
+class SqliteStore;
 struct CheckpointWork {
     CrawlItem item;
     std::optional<std::int64_t> eligible_unix_ms;
     bool was_active = false;
 };
 struct CrawlCheckpoint {
-    static constexpr std::uint32_t supported_version = 2;
+    static constexpr std::uint32_t supported_version = 3;
     std::uint32_t format_version = supported_version;
     std::string application_version = std::string{version};
     Url seed;
@@ -20,6 +21,9 @@ struct CrawlCheckpoint {
     HttpClientOptions http;
     std::uint64_t sequence = 0;
     bool completed = false;
+    // Runtime-only external membership descriptor, never a snapshot shortcut.
+    std::optional<std::size_t> external_seen_count{};
+    std::shared_ptr<SqliteStore> opened_store{};
     DeferredState deferred{};
     std::shared_ptr<DiscoverySpool> spool_sync{}; // Session-only durability fence.
     std::vector<Url> seen;

@@ -28,7 +28,7 @@ void restore_session(const Url& seed, const CrawlOptions& options, const HttpCli
 {
     if (!options.resume_from) { policy.schedule(state, scheduler, result); return; }
     const auto& c = *options.resume_from;
-    CheckpointManager::validate(c);
+    CheckpointManager::validate(c, c.external_seen_count ? std::numeric_limits<std::size_t>::max() : 1000000);
     if (seed != c.seed || !CheckpointManager::same_semantics(options, c.options)
         || http.connect_timeout != c.http.connect_timeout || http.request_timeout != c.http.request_timeout
         || http.max_redirects != c.http.max_redirects || http.max_body_bytes != c.http.max_body_bytes
