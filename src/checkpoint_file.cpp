@@ -27,6 +27,7 @@ CrawlCheckpoint CheckpointManager::read(const std::filesystem::path& path)
 std::size_t CheckpointManager::write(const std::filesystem::path& path, const CrawlCheckpoint& checkpoint,
                                      const std::function<void()>& before_replace)
 {
+    if (checkpoint.spool_sync) { checkpoint.spool_sync->sync(); }
     const auto text = serialize(checkpoint); // Validate before creating anything.
     static std::atomic<std::uint64_t> sequence{0};
     static const auto nonce = std::random_device{}();

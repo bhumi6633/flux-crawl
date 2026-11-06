@@ -16,6 +16,9 @@ PersistenceRuntime::PersistenceRuntime(const Url& seed, const CrawlOptions& opti
 }
 void PersistenceRuntime::initialize(CrawlState& state, HostScheduler& scheduler, CrawlPolicy& policy, CrawlResult& result)
 {
+    auto prefix = mode_ == PersistenceMode::Sqlite ? options_.sqlite.path : options_.checkpoint.path;
+    if (mode_ == PersistenceMode::Snapshot && !prefix.empty() && !std::filesystem::exists(std::filesystem::absolute(prefix).parent_path())) { prefix.clear(); }
+    state.configure_spool(prefix, mode_ != PersistenceMode::None);
     if (mode_ != PersistenceMode::Sqlite) { restore_session(seed_, options_, http_, state, scheduler, policy, result); return; }
     if (options_.sqlite.resume) {
         auto opened = SqliteStore::open(options_.sqlite.path);
@@ -52,17 +55,20 @@ std::optional<PersistenceRuntime::Request> PersistenceRuntime::capture(const Cra
     counters.urls_pending = state.seen_count() - counters.resources_completed - counters.urls_blocked_by_robots - counters.robots_resources_reused;
     counters.retries_cancelled = counters.retries_scheduled + counters.recovery_retry_attempts - counters.retries_attempted;
     counters.robots_retries_cancelled = counters.robots_retries_scheduled - counters.robots_retries_attempted;
-    metadata.completed = counters.urls_pending == 0;
+    metadata.deferred = state.spool() ? state.spool()->capture() : DeferredState{}; metadata.spool_sync = state.spool();
+    metadata.completed = counters.urls_pending == 0 && metadata.deferred.count() == 0;
     if (journal_.active() > scheduler.active()) { throw std::logic_error("Persistence active-work accounting disagrees"); }
     auto batch = std::make_shared<CrawlMutationBatch>(journal_.batch(std::move(metadata), scheduler.active() - journal_.active()));
-    { std::lock_guard lock{queue_mutex_}; queue_.push_back(batch); }
+    std::size_t queued = 0;
+    { std::lock_guard lock{queue_mutex_}; queue_.push_back(batch); queued = queue_.size(); }
     ++sequence_; journal_.clear(); // Only detach after the ordered queue owns the complete batch.
-    return Request{{}, true, final};
+    return Request{{}, true, final, batch->operations, queued};
 }
 PersistenceRuntime::Report PersistenceRuntime::write(const Request& request)
 {
     if (!request.database) { return {snapshots_.write(*request.snapshot), {}, {}, false}; }
     Report report; report.is_database = true;
+    report.database.buffered_mutations_peak = request.buffered; report.database.queued_batches_peak = request.queued;
     std::lock_guard writer{writer_mutex_};
     if (failed_.load()) { report.error = "SQLite persistence previously failed; durable prefix preserved"; return report; }
     const auto before = store_->metrics();
@@ -90,6 +96,8 @@ void PersistenceRuntime::report(CrawlResult& result, Report report)
 {
     if (!report.is_database) { CheckpointRuntime::report(result, std::move(report.snapshot)); return; }
     if (!report.error.empty()) { result.persistence_errors.push_back(std::move(report.error)); }
+    result.persistence.buffered_mutations_peak = std::max(result.persistence.buffered_mutations_peak, report.database.buffered_mutations_peak);
+    result.persistence.queued_batches_peak = std::max(result.persistence.queued_batches_peak, report.database.queued_batches_peak);
     result.persistence.transactions += report.database.transactions; result.persistence.mutations += report.database.mutations;
     result.persistence.row_changes += report.database.row_changes; result.persistence.commit_time += report.database.commit_time;
     result.persistence.max_commit_time = std::max(result.persistence.max_commit_time, report.database.max_commit_time);

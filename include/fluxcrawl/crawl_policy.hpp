@@ -11,7 +11,7 @@ class CrawlPolicy {
 public:
     enum class State { Fetching, Ready, Unavailable }; // Missing entry is Unknown.
     explicit CrawlPolicy(bool enabled) : enabled_{enabled} {}
-    void schedule(CrawlState& discovery, HostScheduler& scheduler, CrawlResult& result);
+    void schedule(CrawlState& discovery, HostScheduler& scheduler, CrawlResult& result, CommonProfile* profile = nullptr);
     void resolve(const CrawlRecord& bootstrap, std::optional<RobotsPolicy> rules,
                  HostScheduler& scheduler, CrawlResult& result);
     void accept(HostScheduler::Work work, HostScheduler& scheduler, CrawlResult& result);

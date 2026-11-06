@@ -8,6 +8,8 @@ namespace fluxcrawl {
 struct DeferredExtent {
     std::size_t depth;
     std::uint64_t begin, end, count;
+    std::uint64_t file_id = 0;
+    std::string origin;
 };
 struct DeferredState {
     std::string directory;

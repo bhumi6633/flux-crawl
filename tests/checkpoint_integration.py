@@ -47,7 +47,7 @@ def main():
                 active = Path(str(saved) + ".active")
                 assert active.exists()
                 text = active.read_text()
-                assert "FLUXCRAWL_CHECKPOINT 1" in text and "work " in text
+                assert "FLUXCRAWL_CHECKPOINT 2" in text and "work " in text
                 _, _, final = run(site, directory, resumed, resume=active, name=initial + "-recovered")
                 assert final["pending"] == 0 and final["discovered"] == 11 and final["completed"] == 11, final
                 assert final["recovery"] > 0 and final["unresolved"] > 0

@@ -62,6 +62,8 @@ CrawlCheckpoint CheckpointManager::metadata_only(const CrawlCheckpoint& source)
     c.format_version = source.format_version; c.application_version = source.application_version;
     c.options.max_depth = source.options.max_depth; c.options.max_pages = source.options.max_pages;
     c.options.same_host_only = source.options.same_host_only; c.options.respect_robots = source.options.respect_robots;
+    c.deferred = source.deferred; c.spool_sync = source.spool_sync;
+    c.options.backpressure = source.options.backpressure;
     c.options.retry = source.options.retry; c.options.scheduling = source.options.scheduling;
     c.http = source.http; c.sequence = source.sequence; c.completed = source.completed;
     c.counters = copy_counters(source.counters); return c;
@@ -75,13 +77,16 @@ CrawlResult CheckpointManager::copy_counters(const CrawlResult& result)
 bool CheckpointManager::same_semantics(const CrawlOptions& a, const CrawlOptions& b)
 {
     std::ostringstream x, y; x.imbue(std::locale::classic()); y.imbue(std::locale::classic());
-    x << std::setprecision(17); y << std::setprecision(17); options(x, a); options(y, b); return x.str() == y.str();
+    x << std::setprecision(17); y << std::setprecision(17); options(x, a); options(y, b); return x.str() == y.str() && a.backpressure.enabled == b.backpressure.enabled
+        && (!a.backpressure.enabled || (a.backpressure.high_watermark == b.backpressure.high_watermark && a.backpressure.low_watermark == b.backpressure.low_watermark));
 }
 void CheckpointManager::validate(const CrawlCheckpoint& c, std::size_t maximum_seen)
 {
-    require(c.format_version == CrawlCheckpoint::supported_version, "unsupported format version");
+    require((c.format_version == 1 || c.format_version == CrawlCheckpoint::supported_version), "unsupported format version");
     require(c.sequence != std::numeric_limits<std::uint64_t>::max(), "sequence overflow");
-    c.options.retry.validate(); (void)HostScheduler{1, c.options.scheduling};
+    c.options.retry.validate(); c.options.backpressure.validate();
+    DiscoverySpool::validate(c.deferred, c.options.max_depth);
+    require(c.options.backpressure.enabled || c.deferred.count() == 0, "deferred state requires admission control"); (void)HostScheduler{1, c.options.scheduling};
     require(c.http.connect_timeout.count() > 0 && c.http.request_timeout.count() > 0
         && c.http.connect_timeout.count() <= std::numeric_limits<long>::max()
         && c.http.request_timeout.count() <= std::numeric_limits<long>::max()
@@ -128,7 +133,7 @@ void CheckpointManager::validate(const CrawlCheckpoint& c, std::size_t maximum_s
         && r.robots_attempts_unresolved <= r.robots_fetches, "robots counters disagree");
     require(r.responses_recovered_after_retry <= r.resources_completed && r.retries_exhausted <= r.resources_completed,
         "terminal counters disagree");
-    require(c.completed == c.unfinished.empty(), "completed marker disagrees");
+    require(c.completed == (c.unfinished.empty() && c.deferred.count() == 0), "completed marker disagrees");
 }
 std::string CheckpointManager::serialize_metadata(const CrawlCheckpoint& c)
 {
@@ -139,6 +144,11 @@ std::string CheckpointManager::serialize_metadata(const CrawlCheckpoint& c)
     out << "http " << c.http.connect_timeout.count() << ' ' << c.http.request_timeout.count() << ' '
         << c.http.max_redirects << ' ' << c.http.max_body_bytes << ' ' << c.http.use_environment_proxy << ' ' << std::quoted(c.http.user_agent) << '\n';
     for (const auto& [name, member] : fields) { out << name << ' ' << c.counters.*member << '\n'; }
+    if (c.format_version >= 2) {
+        out << "pressure " << c.options.backpressure.enabled << ' ' << c.options.backpressure.high_watermark << ' ' << c.options.backpressure.low_watermark << '\n';
+        out << "spool " << std::quoted(c.deferred.directory) << ' ' << c.deferred.extents.size() << '\n';
+        for (const auto& e : c.deferred.extents) { out << "extent " << e.depth << ' ' << e.begin << ' ' << e.end << ' ' << e.count << ' ' << e.file_id << ' ' << std::quoted(e.origin) << '\n'; }
+    }
     return out.str();
 }
 std::string CheckpointManager::serialize(const CrawlCheckpoint& c)
@@ -162,9 +172,9 @@ namespace {
 CrawlCheckpoint read_metadata(Reader& r)
 {
     r.key("FLUXCRAWL_CHECKPOINT"); const auto version_number = r.number();
-    require(version_number == CrawlCheckpoint::supported_version, "unsupported format version");
+    require((version_number == 1 || version_number == CrawlCheckpoint::supported_version), "unsupported format version");
     r.key("application"); auto app = r.string(); r.key("seed"); auto seed = r.url();
-    CrawlCheckpoint c{.seed = seed}; c.application_version = app;
+    CrawlCheckpoint c{.seed = seed}; c.application_version = app; c.format_version = static_cast<std::uint32_t>(version_number);
     r.key("sequence"); c.sequence = r.number(); r.key("completed"); c.completed = r.boolean();
     r.key("crawl"); c.options.max_depth = r.size(); c.options.max_pages = r.size(); c.options.same_host_only = r.boolean(); c.options.respect_robots = r.boolean();
     r.key("retry"); c.options.retry.max_retries = r.size(); c.options.retry.initial_backoff = std::chrono::milliseconds{r.integer()};
@@ -177,6 +187,11 @@ CrawlCheckpoint read_metadata(Reader& r)
     const auto redirects = r.number(); require(redirects <= static_cast<std::uint64_t>(std::numeric_limits<long>::max()), "redirect limit overflow");
     c.http.max_redirects = static_cast<long>(redirects); c.http.max_body_bytes = r.size(); c.http.use_environment_proxy = r.boolean(); c.http.user_agent = r.string();
     for (const auto& [name, member] : fields) { r.key(name); c.counters.*member = r.size(); }
+    if (c.format_version >= 2) {
+        r.key("pressure"); c.options.backpressure.enabled = r.boolean(); c.options.backpressure.high_watermark = r.size(); c.options.backpressure.low_watermark = r.size();
+        r.key("spool"); c.deferred.directory = r.string(); const auto count = r.size(); require(count <= 10000, "too many deferred depth extents");
+        for (std::size_t n=0; n<count; ++n) { r.key("extent"); const auto depth=r.size(); const auto begin=r.number(); const auto end=r.number(); const auto entries=r.number(); const auto id=r.number(); const auto origin=r.string(); c.deferred.extents.push_back({depth,begin,end,entries,id,origin}); }
+    } else { c.options.backpressure.enabled = false; }
     return c;
 }
 }

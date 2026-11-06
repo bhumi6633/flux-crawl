@@ -8,7 +8,7 @@ namespace fluxcrawl::detail {
 inline bool persistence_enabled(const CrawlOptions& options) { return checkpointing(options) || !options.sqlite.path.empty(); }
 class PersistenceRuntime {
 public:
-    struct Request { std::optional<CrawlCheckpoint> snapshot; bool database = false; bool final = false; };
+    struct Request { std::optional<CrawlCheckpoint> snapshot; bool database = false; bool final = false; std::size_t buffered = 0, queued = 0; };
     struct Report { CheckpointRuntime::Report snapshot; PersistenceMetrics database; std::string error; bool is_database = false; };
     PersistenceRuntime(const Url& seed, const CrawlOptions& options, const HttpClientOptions& http);
     void initialize(CrawlState& state, HostScheduler& scheduler, CrawlPolicy& policy, CrawlResult& result);

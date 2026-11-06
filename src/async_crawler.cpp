@@ -98,9 +98,9 @@ AsyncCrawler::AsyncCrawler(std::size_t concurrency, HttpClientOptions http_optio
 
 CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
 {
-    options.retry.validate();
+    options.retry.validate(); options.backpressure.validate();
     const auto started = std::chrono::steady_clock::now();
-    CrawlState state{seed, options.max_depth};
+    CrawlState state{seed, options.max_depth, options.backpressure};
     HostScheduler scheduler{concurrency_, options.scheduling, detail::persistence_enabled(options), bool(options.resume_from)};
     CrawlPolicy policy{options.respect_robots};
     CrawlResult result;
@@ -114,7 +114,7 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
     const auto publish = [&](HttpResult response, CrawlItem item, std::chrono::nanoseconds latency) {
         detail::publish_page(state, result,
             detail::process_response(std::move(response), std::move(item), options, latency, common), seed, options, scheduler, policy, common);
-        policy.schedule(state, scheduler, result);
+        policy.schedule(state, scheduler, result, common);
     };
     const auto checkpoint = [&](bool final = false) {
         const auto started_checkpoint = detail::persistence_enabled(options) ? HostScheduler::Clock::now() : HostScheduler::Time{};
@@ -128,6 +128,7 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
     };
     const auto fill = [&] {
         detail::ProfileTimer timer{profile ? &profile->refill_time : nullptr};
+        policy.schedule(state, scheduler, result, common);
         bool added = false;
         while (transfers.active.size() < concurrency_ && result.pages_attempted < options.max_pages && !checkpoints.stop(result)) {
             auto item = [&] {
@@ -155,7 +156,7 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
 
     (void)fill();
     checkpoint();
-    while (!transfers.active.empty() || (scheduler.pending() != 0 && result.pages_attempted < options.max_pages && !checkpoints.stop(result))) {
+    while (!transfers.active.empty() || ((scheduler.pending() != 0 || state.has_deferred()) && result.pages_attempted < options.max_pages && !checkpoints.stop(result))) {
         if (transfers.active.empty()) {
             if (const auto deadline = scheduler.next_deadline(HostScheduler::Clock::now())) {
                 std::this_thread::sleep_until(*deadline);
@@ -203,6 +204,7 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
     transfers.close();
     result.robots_retries_cancelled = result.robots_retries_scheduled - result.robots_retries_attempted;
     result.retries_cancelled = result.retries_scheduled + result.recovery_retry_attempts - result.retries_attempted;
+    result.pressure = state.pressure_metrics();
     result.urls_discovered = state.seen_count();
     result.urls_pending = scheduler.resource_pending() + policy.held();
     checkpoint(true);

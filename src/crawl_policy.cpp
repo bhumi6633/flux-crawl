@@ -3,9 +3,19 @@
 #include <algorithm>
 
 namespace fluxcrawl {
-void CrawlPolicy::schedule(CrawlState& discovery, HostScheduler& scheduler, CrawlResult& result)
+void CrawlPolicy::schedule(CrawlState& discovery, HostScheduler& scheduler, CrawlResult& result, CommonProfile* profile)
 {
+    const auto unfinished = [&] { return discovery.seen_count() - result.resources_completed - result.urls_blocked_by_robots - result.robots_resources_reused; };
+    const auto observe = [&] { discovery.observe(unfinished(), scheduler.resource_pending() + held() + discovery.frontier_size()); };
     while (auto item = discovery.next()) { accept({std::move(*item)}, scheduler, result); }
+    observe();
+    // Atomic under the existing coordinator mutex: reserve capacity before seen
+    // insertion, then immediately give the accepted item a scheduler/policy home.
+    for (std::size_t admitted = 0; admitted < 64 && discovery.admit_deferred(unfinished()); ++admitted) {
+        if (profile) { ++profile->links_accepted; }
+        auto item = discovery.next(); accept({std::move(*item)}, scheduler, result); observe();
+    }
+    observe();
 }
 void CrawlPolicy::accept(HostScheduler::Work work, HostScheduler& scheduler, CrawlResult& result)
 {

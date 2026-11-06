@@ -1,5 +1,6 @@
 #pragma once
 #include <fluxcrawl/crawl_types.hpp>
+#include <fluxcrawl/discovery_spool.hpp>
 #include <fluxcrawl/http_client.hpp>
 #include <filesystem>
 #include <functional>
@@ -11,7 +12,7 @@ struct CheckpointWork {
     bool was_active = false;
 };
 struct CrawlCheckpoint {
-    static constexpr std::uint32_t supported_version = 1;
+    static constexpr std::uint32_t supported_version = 2;
     std::uint32_t format_version = supported_version;
     std::string application_version = std::string{version};
     Url seed;
@@ -19,6 +20,8 @@ struct CrawlCheckpoint {
     HttpClientOptions http;
     std::uint64_t sequence = 0;
     bool completed = false;
+    DeferredState deferred{};
+    std::shared_ptr<DiscoverySpool> spool_sync{}; // Session-only durability fence.
     std::vector<Url> seen;
     std::vector<CheckpointWork> unfinished;
     CrawlResult counters; // Only explicitly named aggregate fields are serialized.

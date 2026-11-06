@@ -54,3 +54,6 @@ __pycache__/
 *.db-wal
 *.db-shm
 *.db.owner
+
+# Local append-only deferred-discovery companion directories
+*.discovery-*/

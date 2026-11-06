@@ -122,7 +122,7 @@ struct SqliteStore::Impl {
     }
     void aggregate(const CrawlCheckpoint& c, std::size_t seen, std::size_t pending, std::size_t active) {
         const auto& r = c.counters;
-        require(r.urls_discovered == seen && r.urls_pending == pending && c.completed == (pending == 0), "row counts/completed marker disagree");
+        require(r.urls_discovered == seen && r.urls_pending == pending && c.completed == (pending == 0 && c.deferred.count() == 0), "row counts/completed marker disagree");
         auto remainder = seen;
         for (auto value : {r.resources_completed, r.urls_blocked_by_robots, r.robots_resources_reused, pending}) { require(value <= remainder, "resource counters disagree"); remainder -= value; }
         require(remainder == 0 && r.pages_attempted <= c.options.max_pages, "resource/budget counters disagree");
@@ -185,6 +185,7 @@ void SqliteStore::apply_with_hook(const CrawlMutationBatch& batch, const std::fu
         && batch.metadata.http.use_environment_proxy == p.metadata->http.use_environment_proxy, "semantic/HTTP configuration changed");
     require(batch.metadata.seen.empty() && batch.metadata.unfinished.empty(), "batch must be incremental");
     auto next_metadata = CheckpointManager::metadata_only(batch.metadata);
+    if (batch.metadata.spool_sync) { batch.metadata.spool_sync->sync(); }
     const auto began = Clock::now(); Transaction transaction{p.db()};
     std::size_t seen = p.seen_count, pending = p.work_count, active = p.active_count, applied = 0, row_changes = 0;
     std::unordered_set<Url> new_urls;

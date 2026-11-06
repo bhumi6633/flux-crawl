@@ -19,13 +19,14 @@ namespace {
 class Coordinator {
 public:
     Coordinator(const Url& seed, const CrawlOptions& options, std::size_t workers, const HttpClientOptions& http)
-        : seed_{seed}, options_{options}, state_{seed, options.max_depth}, scheduler_{workers, options.scheduling, detail::persistence_enabled(options), bool(options.resume_from)}, policy_{options.respect_robots}, checkpoints_{seed, options, http}
+        : seed_{seed}, options_{options}, state_{seed, options.max_depth, options.backpressure}, scheduler_{workers, options.scheduling, detail::persistence_enabled(options), bool(options.resume_from)}, policy_{options.respect_robots}, checkpoints_{seed, options, http}
     { checkpoints_.initialize(state_, scheduler_, policy_, result_); }
 
     std::optional<HostScheduler::Lease> acquire(WorkerProfile* profile)
     {
         auto lock = acquire_lock(profile);
         for (;;) {
+            policy_.schedule(state_, scheduler_, result_, profile ? &profile->common : nullptr);
             if (fatal_ || result_.pages_attempted == options_.max_pages || checkpoints_.stop(result_)) { return std::nullopt; }
             {
                 auto claim = [&] {
@@ -46,7 +47,8 @@ public:
                     return claim;
                 }
             }
-            if (scheduler_.pending() == 0 && scheduler_.active() == 0) { return std::nullopt; }
+            if (scheduler_.pending() == 0 && scheduler_.active() == 0 && !state_.has_deferred()) { return std::nullopt; }
+            if (scheduler_.pending() == 0 && scheduler_.active() == 0 && state_.has_deferred()) { continue; }
             const auto deadline = scheduler_.next_deadline(HostScheduler::Clock::now());
             detail::ProfileTimer timer{profile ? &profile->idle : nullptr};
             if (profile) { ++profile->waits; }
@@ -65,7 +67,7 @@ public:
             if (!fatal_) {
                 // The seen check, insertion, enqueue, and result update share this lock.
                 detail::publish_page(state_, result_, std::move(page), seed_, options_, scheduler_, policy_, profile ? &profile->common : nullptr);
-                policy_.schedule(state_, scheduler_, result_);
+                policy_.schedule(state_, scheduler_, result_, profile ? &profile->common : nullptr);
             }
             claim.release();
         }
@@ -91,6 +93,7 @@ public:
         if (fatal_) { std::rethrow_exception(fatal_); }
         result_.robots_retries_cancelled = result_.robots_retries_scheduled - result_.robots_retries_attempted;
         result_.retries_cancelled = result_.retries_scheduled + result_.recovery_retry_attempts - result_.retries_attempted;
+        result_.pressure = state_.pressure_metrics();
         result_.urls_discovered = state_.seen_count();
         result_.urls_pending = scheduler_.resource_pending() + policy_.held();
         if (auto snapshot = checkpoints_.capture(state_, scheduler_, policy_, result_, true)) {
@@ -134,7 +137,7 @@ ThreadPoolCrawler::ThreadPoolCrawler(std::size_t workers, HttpClientOptions http
 
 CrawlResult ThreadPoolCrawler::crawl(const Url& seed, const CrawlOptions& options) const
 {
-    options.retry.validate();
+    options.retry.validate(); options.backpressure.validate();
     const auto started = std::chrono::steady_clock::now();
     // Initialize libxml2 on the calling thread. HttpClient already initialized curl.
     const HtmlLinkExtractor initialized_parser;

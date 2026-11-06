@@ -31,7 +31,7 @@ def main():
             assert partial.returncode == 0, partial.stdout + partial.stderr
             assert "Pages attempted: 3" in partial.stdout and "Checkpoint stop reached" in partial.stdout
             text = file.read_text()
-            assert text.startswith("FLUXCRAWL_CHECKPOINT 1\n") and "work " in text and "0x" not in text
+            assert text.startswith("FLUXCRAWL_CHECKPOINT 2\n") and "work " in text and "0x" not in text
             for flags in (("--depth", "2"), ("--max-pages", "200"), ("--respect-robots", "1"), ("--engine", "bad"), ("--workers", "0")):
                 assert command("resume", file, *flags).returncode != 0
             resumed = command("resume", file, "--engine", "async", "--concurrency", "16")

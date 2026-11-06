@@ -36,6 +36,7 @@ void restore_session(const Url& seed, const CrawlOptions& options, const HttpCli
         throw std::invalid_argument("Resume semantic/HTTP configuration must match checkpoint");
     }
     state.restore_seen(c.seen);
+    if (state.spool()) { state.spool()->restore(c.deferred); }
     result = CheckpointManager::copy_counters(c.counters);
     result.session_start_attempts = result.pages_attempted;
     result.session_start_responses = result.responses_received;
@@ -64,6 +65,7 @@ std::optional<CrawlCheckpoint> CheckpointRuntime::capture(const CrawlState& stat
     CrawlCheckpoint c{.seed = seed_};
     if (sequence_ >= std::numeric_limits<std::uint64_t>::max() - 1) { throw std::overflow_error("Checkpoint sequence exhausted"); }
     c.sequence = ++sequence_; c.options = options_; c.options.checkpoint = {}; c.options.resume_from.reset(); c.options.profile = false;
+    c.deferred = state.spool() ? state.spool()->capture() : DeferredState{}; c.spool_sync = state.spool();
     c.http = http_; c.seen = state.seen_urls(); c.counters = CheckpointManager::copy_counters(result);
     auto work = scheduler.snapshot(); auto held = policy.snapshot();
     work.insert(work.end(), held.begin(), held.end());
@@ -79,7 +81,7 @@ std::optional<CrawlCheckpoint> CheckpointRuntime::capture(const CrawlState& stat
     c.counters.urls_discovered = c.seen.size(); c.counters.urls_pending = c.unfinished.size();
     c.counters.retries_cancelled = c.counters.retries_scheduled + c.counters.recovery_retry_attempts - c.counters.retries_attempted;
     c.counters.robots_retries_cancelled = c.counters.robots_retries_scheduled - c.counters.robots_retries_attempted;
-    c.completed = c.unfinished.empty();
+    c.completed = c.unfinished.empty() && c.deferred.count() == 0;
     return c;
 }
 CheckpointRuntime::Report CheckpointRuntime::write(const CrawlCheckpoint& snapshot)
@@ -89,6 +91,7 @@ CheckpointRuntime::Report CheckpointRuntime::write(const CrawlCheckpoint& snapsh
     const auto started = HostScheduler::Clock::now();
     try {
         Report report;
+        if (snapshot.spool_sync) { snapshot.spool_sync->sync(); }
         if (!options_.checkpoint.path.empty()) { report.bytes = CheckpointManager::write(options_.checkpoint.path, snapshot); }
         if (options_.checkpoint.on_snapshot) { options_.checkpoint.on_snapshot(snapshot); }
         last_written_ = snapshot.sequence;
