@@ -45,6 +45,7 @@ ProcessedPage process_response(HttpResult fetched, CrawlItem item, const CrawlOp
 void publish_page(CrawlState& state, CrawlResult& result, ProcessedPage page,
                   const Url& seed, const CrawlOptions& options, HostScheduler& scheduler, CrawlPolicy& policy, CommonProfile* profile)
 {
+    scheduler.note_activity();
     const bool bootstrap = page.record.item.policy_request;
     const auto* response = std::get_if<CrawlResponseMetadata>(&page.record.outcome);
     const auto* error = std::get_if<HttpError>(&page.record.outcome);
@@ -82,6 +83,7 @@ void publish_page(CrawlState& state, CrawlResult& result, ProcessedPage page,
     } else if (bootstrap) {
         policy.resolve(page.record, std::move(page.robots_rules), scheduler, result);
     } else {
+        scheduler.mark_terminal(page.record.item);
         ++result.resources_completed;
         if (transient && options.retry.max_retries != 0) { ++result.retries_exhausted; }
         if (error) { ++result.terminal_fetch_failures; }

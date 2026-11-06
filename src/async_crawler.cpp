@@ -1,7 +1,7 @@
 #include <fluxcrawl/async_crawler.hpp>
 #include "crawl_processing.hpp"
 #include "profile_timer.hpp"
-#include "checkpoint_runtime.hpp"
+#include "persistence_runtime.hpp"
 #include <algorithm>
 #include "curl_transfer.hpp"
 
@@ -101,11 +101,11 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
     options.retry.validate();
     const auto started = std::chrono::steady_clock::now();
     CrawlState state{seed, options.max_depth};
-    HostScheduler scheduler{concurrency_, options.scheduling, detail::checkpointing(options), bool(options.resume_from)};
+    HostScheduler scheduler{concurrency_, options.scheduling, detail::persistence_enabled(options), bool(options.resume_from)};
     CrawlPolicy policy{options.respect_robots};
     CrawlResult result;
-    detail::CheckpointRuntime checkpoints{seed, options, http_options_};
-    detail::restore_session(seed, options, http_options_, state, scheduler, policy, result);
+    detail::PersistenceRuntime checkpoints{seed, options, http_options_};
+    checkpoints.initialize(state, scheduler, policy, result);
     if (options.profile) { result.profile.emplace(); result.profile->async.emplace(); }
     auto* common = result.profile ? &result.profile->common : nullptr;
     auto* profile = result.profile ? &*result.profile->async : nullptr;
@@ -117,9 +117,9 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
         policy.schedule(state, scheduler, result);
     };
     const auto checkpoint = [&](bool final = false) {
-        const auto started_checkpoint = detail::checkpointing(options) ? HostScheduler::Clock::now() : HostScheduler::Time{};
+        const auto started_checkpoint = detail::persistence_enabled(options) ? HostScheduler::Clock::now() : HostScheduler::Time{};
         if (auto snapshot = checkpoints.capture(state, scheduler, policy, result, final)) {
-            detail::CheckpointRuntime::report(result, checkpoints.write(*snapshot));
+            detail::PersistenceRuntime::report(result, checkpoints.write(*snapshot));
             const auto pause = HostScheduler::Clock::now() - started_checkpoint;
             // The event loop cannot observe completions during snapshot I/O.
             // Keep this operational pause out of request-latency samples.

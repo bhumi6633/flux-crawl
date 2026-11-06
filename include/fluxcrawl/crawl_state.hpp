@@ -7,12 +7,14 @@
 
 namespace fluxcrawl {
 class HostScheduler;
+class CrawlMutationSink;
 
 // Single-threaded discovery state. Seen means accepted, not fetched or completed.
 class CrawlState {
 public:
     CrawlState(Url seed, std::size_t max_depth);
 
+    void set_mutation_sink(CrawlMutationSink* sink) noexcept { sink_ = sink; }
     [[nodiscard]] std::optional<CrawlItem> next();
     // Move accepted discoveries into scheduling; seen identity remains here.
     void schedule_pending(HostScheduler& scheduler);
@@ -28,6 +30,7 @@ public:
     [[nodiscard]] bool empty() const noexcept { return frontier_.empty(); }
 
 private:
+    CrawlMutationSink* sink_ = nullptr;
     CrawlFrontier frontier_;
     std::unordered_set<Url> seen_urls_;
     std::size_t max_depth_;

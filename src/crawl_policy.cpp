@@ -31,12 +31,14 @@ void CrawlPolicy::admit(HostScheduler::Work work, const Entry& entry, HostSchedu
     auto& item = work.item;
     const bool bootstrap_url = entry.reusable && item.url.path() == "/robots.txt" && !item.url.has_query();
     if (entry.deny_all || (!bootstrap_url && !entry.rules.allowed(CrawlerIdentity::product_token, item.url))) {
+        scheduler.mark_terminal(item);
         ++result.urls_blocked_by_robots;
     } else {
         ++result.robots_allowed;
         if (bootstrap_url) {
             // Infrastructure response already obtained; do not manufacture a
             // resource attempt or retain a second copy of its body.
+            scheduler.mark_terminal(item);
             ++result.robots_resources_reused;
         } else if (work.eligible_at) { scheduler.delay(std::move(item), *work.eligible_at); }
         else { scheduler.enqueue(std::move(item)); }

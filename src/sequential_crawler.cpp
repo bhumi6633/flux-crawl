@@ -3,7 +3,7 @@
 #include <fluxcrawl/crawl_state.hpp>
 #include "crawl_processing.hpp"
 #include "profile_timer.hpp"
-#include "checkpoint_runtime.hpp"
+#include "persistence_runtime.hpp"
 
 #include <utility>
 #include <thread>
@@ -18,11 +18,11 @@ CrawlResult SequentialCrawler::crawl(const Url& seed, const CrawlOptions& option
     options.retry.validate();
     const auto started = std::chrono::steady_clock::now();
     CrawlState state{seed, options.max_depth};
-    HostScheduler scheduler{1, options.scheduling, detail::checkpointing(options), bool(options.resume_from)};
+    HostScheduler scheduler{1, options.scheduling, detail::persistence_enabled(options), bool(options.resume_from)};
     CrawlPolicy policy{options.respect_robots};
     CrawlResult result;
-    detail::CheckpointRuntime checkpoints{seed, options, client_.options()};
-    detail::restore_session(seed, options, client_.options(), state, scheduler, policy, result);
+    detail::PersistenceRuntime checkpoints{seed, options, client_.options()};
+    checkpoints.initialize(state, scheduler, policy, result);
     if (options.profile) { result.profile.emplace(); }
     auto* profile = result.profile ? &result.profile->common : nullptr;
     while (scheduler.pending() != 0 && result.pages_attempted < options.max_pages && !checkpoints.stop(result)) {
@@ -42,7 +42,7 @@ CrawlResult SequentialCrawler::crawl(const Url& seed, const CrawlOptions& option
         policy.schedule(state, scheduler, result);
         item.reset();
         if (auto snapshot = checkpoints.capture(state, scheduler, policy, result)) {
-            detail::CheckpointRuntime::report(result, checkpoints.write(*snapshot));
+            detail::PersistenceRuntime::report(result, checkpoints.write(*snapshot));
         }
     }
     result.robots_retries_cancelled = result.robots_retries_scheduled - result.robots_retries_attempted;
@@ -50,7 +50,7 @@ CrawlResult SequentialCrawler::crawl(const Url& seed, const CrawlOptions& option
     result.urls_discovered = state.seen_count();
     result.urls_pending = scheduler.resource_pending() + policy.held();
     if (auto snapshot = checkpoints.capture(state, scheduler, policy, result, true)) {
-        detail::CheckpointRuntime::report(result, checkpoints.write(*snapshot));
+        detail::PersistenceRuntime::report(result, checkpoints.write(*snapshot));
     }
     result.elapsed = std::chrono::steady_clock::now() - started;
     return result;

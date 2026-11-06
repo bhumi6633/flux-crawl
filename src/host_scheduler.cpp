@@ -1,4 +1,5 @@
 #include <fluxcrawl/host_scheduler.hpp>
+#include <fluxcrawl/persistence_events.hpp>
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -62,8 +63,11 @@ HostScheduler::HostScheduler(std::size_t global_limit, SchedulingOptions options
     }
     (void)TokenBucket{options.rate}; // Validate even if no work is attempted.
 }
+void HostScheduler::mark_terminal(const CrawlItem& item) { if (sink_) { sink_->completed(item); } }
+void HostScheduler::note_activity() { if (sink_) { sink_->activity(); } }
 void HostScheduler::enqueue(CrawlItem item)
 {
+    if (sink_) { sink_->work(item, {}, false); }
     auto [entry, created] = hosts_.try_emplace(HostKey::from(item.url), options_.rate);
     auto& host = entry->second;
     if (created && cold_limits_) { host.bucket.start_empty(Clock::now()); }
@@ -89,6 +93,7 @@ void HostScheduler::enqueue(CrawlItem item)
 }
 void HostScheduler::delay(CrawlItem item, Time eligible_at)
 {
+    if (sink_) { sink_->work(item, eligible_at, false); }
     const auto depth = item.depth;
     const bool infrastructure = item.policy_request;
     auto [count, inserted] = depths_.try_emplace(depth, 0);
@@ -141,6 +146,7 @@ std::optional<HostScheduler::Lease> HostScheduler::acquire(Time now)
         ++active_;
         ++host->active;
         active_depth_ = depth;
+        if (sink_) { sink_->work(lease.item, {}, true); sink_->activity(); }
         return lease;
     }
     return std::nullopt;

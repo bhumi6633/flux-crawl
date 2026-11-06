@@ -3,7 +3,7 @@
 
 #include "crawl_processing.hpp"
 #include "profile_timer.hpp"
-#include "checkpoint_runtime.hpp"
+#include "persistence_runtime.hpp"
 #include <algorithm>
 
 #include <condition_variable>
@@ -19,8 +19,8 @@ namespace {
 class Coordinator {
 public:
     Coordinator(const Url& seed, const CrawlOptions& options, std::size_t workers, const HttpClientOptions& http)
-        : seed_{seed}, options_{options}, state_{seed, options.max_depth}, scheduler_{workers, options.scheduling, detail::checkpointing(options), bool(options.resume_from)}, policy_{options.respect_robots}, checkpoints_{seed, options, http}
-    { detail::restore_session(seed, options, http, state_, scheduler_, policy_, result_); }
+        : seed_{seed}, options_{options}, state_{seed, options.max_depth}, scheduler_{workers, options.scheduling, detail::persistence_enabled(options), bool(options.resume_from)}, policy_{options.respect_robots}, checkpoints_{seed, options, http}
+    { checkpoints_.initialize(state_, scheduler_, policy_, result_); }
 
     std::optional<HostScheduler::Lease> acquire(WorkerProfile* profile)
     {
@@ -37,11 +37,11 @@ public:
                     if (profile) { max_active_ = std::max(max_active_, scheduler_.active()); }
                     if (auto snapshot = checkpoints_.capture(state_, scheduler_, policy_, result_)) {
                         lock.unlock();
-                        detail::CheckpointRuntime::Report report;
+                        detail::PersistenceRuntime::Report report;
                         try { report = checkpoints_.write(*snapshot); }
                         catch (...) { lock.lock(); throw; }
                         lock.lock();
-                        detail::CheckpointRuntime::report(result_, std::move(report));
+                        detail::PersistenceRuntime::report(result_, std::move(report));
                     }
                     return claim;
                 }
@@ -94,7 +94,7 @@ public:
         result_.urls_discovered = state_.seen_count();
         result_.urls_pending = scheduler_.resource_pending() + policy_.held();
         if (auto snapshot = checkpoints_.capture(state_, scheduler_, policy_, result_, true)) {
-            detail::CheckpointRuntime::report(result_, checkpoints_.write(*snapshot));
+            detail::PersistenceRuntime::report(result_, checkpoints_.write(*snapshot));
         }
         return std::move(result_);
     }
@@ -116,7 +116,7 @@ private:
     CrawlState state_;
     HostScheduler scheduler_;
     CrawlPolicy policy_;
-    detail::CheckpointRuntime checkpoints_;
+    detail::PersistenceRuntime checkpoints_;
     CrawlResult result_;
     std::mutex mutex_;
     std::condition_variable changed_;

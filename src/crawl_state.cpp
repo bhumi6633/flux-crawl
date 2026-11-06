@@ -1,5 +1,6 @@
 #include <fluxcrawl/crawl_state.hpp>
 #include <fluxcrawl/host_scheduler.hpp>
+#include <fluxcrawl/persistence_events.hpp>
 
 namespace fluxcrawl {
 
@@ -29,6 +30,7 @@ bool CrawlState::discover(const Url& url, std::size_t depth)
     }
     try {
         frontier_.push(CrawlItem{url, depth});
+        if (sink_) { sink_->discovered({url, depth}); }
     } catch (...) {
         // Allocation failure must not leave a URL marked seen without queued work.
         seen_urls_.erase(entry);

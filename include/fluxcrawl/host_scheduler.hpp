@@ -8,6 +8,7 @@
 #include <vector>
 
 namespace fluxcrawl {
+class CrawlMutationSink;
 
 struct HostKey {
     std::string scheme, host;
@@ -76,6 +77,9 @@ public:
     [[nodiscard]] std::vector<Work> snapshot() const;
     HostScheduler(const HostScheduler&) = delete;
     HostScheduler& operator=(const HostScheduler&) = delete;
+    void set_mutation_sink(CrawlMutationSink* sink) noexcept { sink_ = sink; }
+    void mark_terminal(const CrawlItem& item);
+    void note_activity();
     void enqueue(CrawlItem item);
     void delay(CrawlItem item, Time eligible_at);
     [[nodiscard]] std::size_t delayed() const noexcept { return delayed_.size(); }
@@ -97,6 +101,7 @@ private:
     void promote(Time now);
     bool depth_eligible() const noexcept;
     void finish(Host& host, std::uint64_t id) noexcept;
+    CrawlMutationSink* sink_ = nullptr;
     bool track_active_, cold_limits_;
     std::uint64_t next_id_ = 0;
     std::map<std::uint64_t, CrawlItem> active_items_;

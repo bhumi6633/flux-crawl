@@ -1,0 +1,98 @@
+#include "persistence_runtime.hpp"
+#include <fluxcrawl/sqlite_store.hpp>
+#include <iostream>
+
+namespace fluxcrawl::detail {
+PersistenceRuntime::PersistenceRuntime(const Url& seed, const CrawlOptions& options, const HttpClientOptions& http)
+    : seed_{seed}, options_{options}, http_{http}, snapshots_{seed, options, http},
+      mode_{!options.sqlite.path.empty() ? PersistenceMode::Sqlite : checkpointing(options) ? PersistenceMode::Snapshot : PersistenceMode::None},
+      sequence_{options.resume_from ? options.resume_from->sequence : 0}
+{
+    if (mode_ == PersistenceMode::Sqlite) {
+        if (checkpointing(options)) { throw std::invalid_argument("Choose one persistence backend: snapshot or SQLite"); }
+        if (options.sqlite.batch_size == 0) { throw std::invalid_argument("SQLite batch size must be positive"); }
+        if (options.sqlite.resume != bool(options.resume_from)) { throw std::invalid_argument("SQLite resume requires an existing database restore model"); }
+    }
+}
+void PersistenceRuntime::initialize(CrawlState& state, HostScheduler& scheduler, CrawlPolicy& policy, CrawlResult& result)
+{
+    if (mode_ != PersistenceMode::Sqlite) { restore_session(seed_, options_, http_, state, scheduler, policy, result); return; }
+    if (options_.sqlite.resume) {
+        auto opened = SqliteStore::open(options_.sqlite.path);
+        const auto loaded = opened->load();
+        if (loaded.sequence != options_.resume_from->sequence || loaded.seed != seed_) { throw std::runtime_error("Database changed since resume model was loaded"); }
+        store_ = std::move(opened);
+    } else {
+        CrawlCheckpoint initial{.seed = seed_}; initial.options = options_; initial.http = http_;
+        initial.seen = {seed_}; initial.unfinished = {{{seed_, 0}, {}, false}};
+        initial.counters.urls_discovered = initial.counters.urls_pending = 1;
+        store_ = SqliteStore::create(options_.sqlite.path, initial);
+    }
+    state.set_mutation_sink(&journal_); scheduler.set_mutation_sink(&journal_);
+    restore_session(seed_, options_, http_, state, scheduler, policy, result);
+    // Rewrite unfinished states once on startup: former active rows become ready,
+    // and held-policy resources retain their retry deadlines. No seen re-inserts.
+    auto pending = scheduler.snapshot(); const auto held = policy.snapshot(); pending.insert(pending.end(), held.begin(), held.end());
+    for (const auto& work : pending) { journal_.work(work.item, work.eligible_at, false); }
+    result.persistence.initialization_time = store_->metrics().initialization_time;
+}
+std::optional<PersistenceRuntime::Request> PersistenceRuntime::capture(const CrawlState& state, const HostScheduler& scheduler,
+                                                                      const CrawlPolicy& policy, const CrawlResult& result, bool final)
+{
+    if (mode_ != PersistenceMode::Sqlite) {
+        auto snapshot = snapshots_.capture(state, scheduler, policy, result, final);
+        if (!snapshot) { return {}; }
+        return Request{std::move(snapshot), false, final};
+    }
+    if (failed_.load() || (!final && journal_.operations() < options_.sqlite.batch_size)) { return {}; }
+    if (sequence_ >= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) - 1) { throw std::overflow_error("SQLite transaction sequence exhausted"); }
+    CrawlCheckpoint source{.seed = seed_}; source.options = options_; source.http = http_; source.sequence = sequence_ + 1;
+    auto metadata = CheckpointManager::metadata_only(source); metadata.counters = CheckpointManager::copy_counters(result);
+    auto& counters = metadata.counters; counters.urls_discovered = state.seen_count();
+    counters.urls_pending = state.seen_count() - counters.resources_completed - counters.urls_blocked_by_robots - counters.robots_resources_reused;
+    counters.retries_cancelled = counters.retries_scheduled + counters.recovery_retry_attempts - counters.retries_attempted;
+    counters.robots_retries_cancelled = counters.robots_retries_scheduled - counters.robots_retries_attempted;
+    metadata.completed = counters.urls_pending == 0;
+    if (journal_.active() > scheduler.active()) { throw std::logic_error("Persistence active-work accounting disagrees"); }
+    auto batch = std::make_shared<CrawlMutationBatch>(journal_.batch(std::move(metadata), scheduler.active() - journal_.active()));
+    { std::lock_guard lock{queue_mutex_}; queue_.push_back(batch); }
+    ++sequence_; journal_.clear(); // Only detach after the ordered queue owns the complete batch.
+    return Request{{}, true, final};
+}
+PersistenceRuntime::Report PersistenceRuntime::write(const Request& request)
+{
+    if (!request.database) { return {snapshots_.write(*request.snapshot), {}, {}, false}; }
+    Report report; report.is_database = true;
+    std::lock_guard writer{writer_mutex_};
+    if (failed_.load()) { report.error = "SQLite persistence previously failed; durable prefix preserved"; return report; }
+    const auto before = store_->metrics();
+    try {
+        for (;;) {
+            std::shared_ptr<const CrawlMutationBatch> batch;
+            { std::lock_guard lock{queue_mutex_}; if (queue_.empty()) { break; } batch = queue_.front(); }
+            store_->apply(*batch); // Neither crawl mutex nor queue mutex is held during I/O.
+            { std::lock_guard lock{queue_mutex_}; queue_.pop_front(); }
+        }
+    } catch (const std::exception& error) {
+        failed_.store(true); report.error = error.what(); std::cerr << "SQLite persistence failed: " << error.what() << '\n';
+        std::lock_guard lock{queue_mutex_}; queue_.clear();
+    }
+    const auto after = store_->metrics();
+    report.database.transactions = after.transactions - before.transactions;
+    report.database.mutations = after.mutations - before.mutations;
+    report.database.row_changes = after.row_changes - before.row_changes;
+    report.database.commit_time = after.commit_time - before.commit_time;
+    report.database.max_commit_time = after.max_commit_time;
+    if (request.final) { report.database.file_bytes = after.file_bytes; }
+    return report;
+}
+void PersistenceRuntime::report(CrawlResult& result, Report report)
+{
+    if (!report.is_database) { CheckpointRuntime::report(result, std::move(report.snapshot)); return; }
+    if (!report.error.empty()) { result.persistence_errors.push_back(std::move(report.error)); }
+    result.persistence.transactions += report.database.transactions; result.persistence.mutations += report.database.mutations;
+    result.persistence.row_changes += report.database.row_changes; result.persistence.commit_time += report.database.commit_time;
+    result.persistence.max_commit_time = std::max(result.persistence.max_commit_time, report.database.max_commit_time);
+    if (report.database.file_bytes) { result.persistence.file_bytes = report.database.file_bytes; }
+}
+} // namespace fluxcrawl::detail
