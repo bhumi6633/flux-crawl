@@ -24,6 +24,7 @@ struct CrawlCheckpoint {
     // Runtime-only external membership descriptor, never a snapshot shortcut.
     std::optional<std::size_t> external_seen_count{};
     std::shared_ptr<SqliteStore> opened_store{};
+    std::optional<HostScheduler::Time> restore_started_at{}; // Session only, never serialized.
     DeferredState deferred{};
     std::shared_ptr<DiscoverySpool> spool_sync{}; // Session-only durability fence.
     std::vector<Url> seen;

@@ -9,7 +9,9 @@ inline void print_dedup_metrics(std::ostream& out,const CrawlResult& result,cons
        <<"\nDedup lookup time ms: "<<std::chrono::duration<double,std::milli>(d.lookup_time).count()
        <<"\nDedup insert time ms: "<<std::chrono::duration<double,std::milli>(d.insert_time).count()
        <<"\nExact DB checks: "<<d.exact_db_queries<<"\nConfirmed duplicates: "<<d.confirmed_duplicates
+       <<"\nExact new memberships: "<<d.accepted<<"\nUncommitted seen cache hits: "<<d.pending_cache_hits
        <<"\nUncommitted seen cache peak: "<<d.pending_cache_peak<<"\nUncommitted seen cache remaining: "<<d.pending_cache_size<<'\n';
+    if(result.restore_time.count()) { out<<"Resume DB open time ms: "<<std::chrono::duration<double,std::milli>(result.restore_open_time).count()<<"\nResume validation time ms: "<<std::chrono::duration<double,std::milli>(result.restore_validation_time).count()<<"\nResume startup time ms: "<<std::chrono::duration<double,std::milli>(result.restore_time).count()<<'\n'; }
     if(options.mode==DedupMode::BloomSqlite) {
         out<<"Bloom expected elements: "<<options.expected_elements<<"\nBloom target FP rate: "<<options.false_positive_rate
            <<"\nBloom bytes: "<<d.bloom_bytes<<"\nBloom bits: "<<d.bloom_bits<<"\nBloom probes: "<<d.bloom_probes
@@ -39,6 +41,7 @@ inline void print_database_metrics(std::ostream& out, const CrawlResult& result)
     out << "Persistence mode: sqlite\nSQLite transactions: " << m.transactions
         << "\nSQLite peak buffered mutations: " << m.buffered_mutations_peak
         << "\nSQLite peak queued batches: " << m.queued_batches_peak
+        << "\nSQLite seen inserts: " << m.seen_insertions << "\nSQLite seen constraint conflicts: " << m.seen_constraint_conflicts
         << "\nSQLite mutations: " << m.mutations << "\nSQLite row changes: " << m.row_changes
         << "\nSQLite average batch mutations: " << (m.transactions ? static_cast<double>(m.mutations) / static_cast<double>(m.transactions) : 0)
         << "\nSQLite commit time ms: " << std::chrono::duration<double, std::milli>(m.commit_time).count()

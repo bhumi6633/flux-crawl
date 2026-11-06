@@ -54,6 +54,7 @@ struct CrawlResult {
     std::size_t attempts_unresolved = 0, robots_attempts_unresolved = 0;
     // Ephemeral baselines keep current-session throughput separate from cumulative totals.
     std::size_t session_start_attempts = 0, session_start_responses = 0, session_start_bytes = 0;
+    std::chrono::nanoseconds restore_open_time{}, restore_validation_time{}, restore_time{};
     DedupMetrics dedup{};
     QueuePressureMetrics pressure{};
     PersistenceMetrics persistence{};

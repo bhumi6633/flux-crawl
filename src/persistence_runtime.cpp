@@ -20,6 +20,7 @@ PersistenceRuntime::PersistenceRuntime(const Url& seed, const CrawlOptions& opti
 }
 void PersistenceRuntime::initialize(CrawlState& state, HostScheduler& scheduler, CrawlPolicy& policy, CrawlResult& result)
 {
+    const auto restore_began=options_.resume_from && options_.resume_from->restore_started_at ? *options_.resume_from->restore_started_at : HostScheduler::Clock::now();
     auto prefix = mode_ == PersistenceMode::Sqlite ? options_.sqlite.path : options_.checkpoint.path;
     if (mode_ == PersistenceMode::Snapshot && !prefix.empty() && !std::filesystem::exists(std::filesystem::absolute(prefix).parent_path())) { prefix.clear(); }
     state.configure_spool(prefix, mode_ != PersistenceMode::None);
@@ -44,6 +45,7 @@ void PersistenceRuntime::initialize(CrawlState& state, HostScheduler& scheduler,
     // and held-policy resources retain their retry deadlines. No seen re-inserts.
     auto pending = scheduler.snapshot(); const auto held = policy.snapshot(); pending.insert(pending.end(), held.begin(), held.end());
     for (const auto& work : pending) { journal_.work(work.item, work.eligible_at, false); }
+    if(options_.resume_from) { const auto timings=store_->load_timings(); result.restore_open_time=timings.open; result.restore_validation_time=timings.seen+timings.work+timings.validation; result.restore_time=HostScheduler::Clock::now()-restore_began; }
     result.persistence.initialization_time = store_->metrics().initialization_time;
 }
 std::optional<PersistenceRuntime::Request> PersistenceRuntime::capture(CrawlState& state, const HostScheduler& scheduler,
@@ -92,6 +94,8 @@ PersistenceRuntime::Report PersistenceRuntime::write(const Request& request)
         std::lock_guard lock{queue_mutex_}; queue_.clear();
     }
     const auto after = store_->metrics();
+    report.database.seen_insertions = after.seen_insertions - before.seen_insertions;
+    report.database.seen_constraint_conflicts = after.seen_constraint_conflicts - before.seen_constraint_conflicts;
     report.database.transactions = after.transactions - before.transactions;
     report.database.mutations = after.mutations - before.mutations;
     report.database.row_changes = after.row_changes - before.row_changes;
@@ -106,6 +110,7 @@ void PersistenceRuntime::report(CrawlResult& result, Report report)
     if (!report.error.empty()) { result.persistence_errors.push_back(std::move(report.error)); }
     result.persistence.buffered_mutations_peak = std::max(result.persistence.buffered_mutations_peak, report.database.buffered_mutations_peak);
     result.persistence.queued_batches_peak = std::max(result.persistence.queued_batches_peak, report.database.queued_batches_peak);
+    result.persistence.seen_insertions += report.database.seen_insertions; result.persistence.seen_constraint_conflicts += report.database.seen_constraint_conflicts;
     result.persistence.transactions += report.database.transactions; result.persistence.mutations += report.database.mutations;
     result.persistence.row_changes += report.database.row_changes; result.persistence.commit_time += report.database.commit_time;
     result.persistence.max_commit_time = std::max(result.persistence.max_commit_time, report.database.max_commit_time);

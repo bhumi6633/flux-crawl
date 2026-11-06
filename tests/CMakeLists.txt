@@ -200,3 +200,17 @@ if(FLUXCRAWL_SLOW_TESTS)
         "${CMAKE_CURRENT_SOURCE_DIR}/backpressure_stress.py" "$<TARGET_FILE:fluxcrawl>")
     set_tests_properties(backpressure.stress PROPERTIES TIMEOUT 300 LABELS stress)
 endif()
+
+add_executable(fluxcrawl_dedup_test dedup_test.cpp)
+target_link_libraries(fluxcrawl_dedup_test PRIVATE FluxCrawl::core)
+fluxcrawl_enable_warnings(fluxcrawl_dedup_test)
+add_test(NAME core.dedup COMMAND fluxcrawl_dedup_test "${CMAKE_CURRENT_BINARY_DIR}/dedup-unit")
+set_tests_properties(core.dedup PROPERTIES TIMEOUT 30)
+add_test(NAME dedup.integration COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/dedup_integration.py" "$<TARGET_FILE:fluxcrawl>")
+set_tests_properties(dedup.integration PROPERTIES TIMEOUT 240)
+if(FLUXCRAWL_SLOW_TESTS)
+    add_test(NAME dedup.stress COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/dedup_stress.py" "$<TARGET_FILE:fluxcrawl>")
+    set_tests_properties(dedup.stress PROPERTIES TIMEOUT 720 LABELS stress)
+endif()

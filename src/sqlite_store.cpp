@@ -197,7 +197,9 @@ void SqliteStore::apply_with_hook(const CrawlMutationBatch& batch, const std::fu
     std::unordered_set<Url> new_urls;
     for (const auto& url : batch.discoveries) {
         require(new_urls.insert(url).second, "duplicate discovery mutation");
-        auto& s = *p.insert_seen; s.start(); s.text(1, url.str()); s.done(); ++seen; row_changes += static_cast<std::size_t>(sqlite3_changes(p.db()));
+        auto& s = *p.insert_seen; s.start(); s.text(1, url.str());
+        try { s.done(); } catch (...) { if(sqlite3_extended_errcode(p.db())==SQLITE_CONSTRAINT_PRIMARYKEY || sqlite3_extended_errcode(p.db())==SQLITE_CONSTRAINT_UNIQUE) { ++p.stats.seen_constraint_conflicts; } throw; }
+        ++seen; row_changes += static_cast<std::size_t>(sqlite3_changes(p.db()));
         if (hook) { hook(++applied); } else { ++applied; }
     }
     std::unordered_set<Url> changed;
@@ -227,6 +229,7 @@ void SqliteStore::apply_with_hook(const CrawlMutationBatch& batch, const std::fu
     transaction.commit();
     p.metadata = std::move(next_metadata); p.seen_count = seen; p.work_count = pending; p.active_count = active;
     const auto elapsed = Clock::now() - began;
+    p.stats.seen_insertions += batch.discoveries.size();
     ++p.stats.transactions; p.stats.mutations += batch.operations; p.stats.row_changes += row_changes + 2;
     p.committed.store(batch.metadata.sequence);
     p.stats.commit_time += elapsed; p.stats.max_commit_time = std::max(p.stats.max_commit_time, elapsed);

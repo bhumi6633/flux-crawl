@@ -13,11 +13,13 @@ int checkpoint_resume_main(int argc, char* argv[])
 {
     try {
         if (argc < 3) { throw std::invalid_argument("Usage: fluxcrawl resume FILE [--engine NAME] [--workers N | --concurrency N]"); }
+        const auto restore_began=fluxcrawl::HostScheduler::Clock::now();
         const bool database = fluxcrawl::SqliteStore::is_database(argv[2]);
         auto saved = [&] {
             if (database) { auto store=std::shared_ptr<fluxcrawl::SqliteStore>{fluxcrawl::SqliteStore::open(argv[2])}; auto saved=std::make_shared<fluxcrawl::CrawlCheckpoint>(store->load()); saved->opened_store=std::move(store); return saved; }
             return std::make_shared<fluxcrawl::CrawlCheckpoint>(fluxcrawl::CheckpointManager::read(argv[2]));
         }();
+        saved->restore_started_at=restore_began;
         auto options = saved->options;
         options.resume_from = saved;
         if (database) { options.sqlite.path = argv[2]; options.sqlite.resume = true; }
