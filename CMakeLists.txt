@@ -63,3 +63,7 @@ endif()
 add_executable(fluxcrawl_persistence_scale tools/persistence_scale.cpp)
 target_link_libraries(fluxcrawl_persistence_scale PRIVATE FluxCrawl::core)
 fluxcrawl_enable_warnings(fluxcrawl_persistence_scale)
+
+add_executable(fluxcrawl_dedup_baseline tools/dedup_baseline.cpp)
+target_link_libraries(fluxcrawl_dedup_baseline PRIVATE FluxCrawl::core)
+fluxcrawl_enable_warnings(fluxcrawl_dedup_baseline)
