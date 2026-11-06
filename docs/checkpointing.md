@@ -1,5 +1,11 @@
 # Snapshot checkpointing and recovery
 
+Step 16 adds format two: watermarks and append-only deferred-discovery companion
+manifests. A recovery point with deferred work requires its referenced directory;
+see [bounded-work recovery contract](backpressure.md#persistence-and-recovery).
+The format-one layout below remains the historical readable format. New payloads
+include the version-two pressure/spool fields after counters.
+
 FluxCrawl checkpoints logical crawl state using snapshot semantics. Pending and
 active resources are captured as unfinished work. Active network requests are not
 preserved and may be reissued after resume, giving at-least-once request behavior
@@ -120,8 +126,8 @@ iteration. HostKey is derived again from URL components; no independent host
 identity can disagree with the URL. Version 1 limits files to 64 MiB and seen URLs
 to one million. Exceeding limits is an explicit checkpoint error, not truncation.
 
-Format version drives compatibility; application version is diagnostic. Only
-format one is supported, with no silent old/new-version migration. New incompatible
+Format version drives compatibility; application version is diagnostic. Formats one and two are supported. Version one restores with admission disabled;
+new writes use version two. New incompatible
 fields require a format version change. Validation checks bounds and invariants,
 not cryptographic authenticity; snapshots are not an authenticated archive.
 

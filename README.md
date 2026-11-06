@@ -921,9 +921,12 @@ attempt count when checkpointing is enabled. This is distinct from the immutable
 page budget: resume can continue the remaining budget. No signal-handler I/O is
 implemented; after abrupt termination, resume uses the last valid periodic file.
 
-Format version one stores canonical seen URLs, unfinished resources with depth
+Format version two stores canonical seen URLs, unfinished resources with depth
 and retry metadata, cumulative counters, seed, semantic crawl/HTTP configuration,
-and previously computed retry deadlines as Unix milliseconds. It excludes bodies,
+and previously computed retry deadlines as Unix milliseconds. It also records admission
+watermarks and deferred-discovery companion prefixes; version-one files still load
+with admission disabled. Preserve referenced companion directories when saving
+a recovery bundle (see Step 16 below). It excludes bodies,
 DOMs, handles, threads, detailed record history, profiling, RNG state and parsed
 robots policies. Format compatibility is separate from application version.
 
@@ -1011,3 +1014,88 @@ flowchart TD
 include reproducible Release commands. The original engine-comparison benchmark
 continues to reject persistence settings; a separate persistence benchmark reports
 commit time independently of request latency.
+
+
+## Bounded pending work and backpressure (Step 16)
+
+A page can discover URLs much faster than the network consumes them. Crawls now
+use a finite admission capacity: **high=10,000, low=7,500** by default.
+
+```sh
+./build/fluxcrawl --engine async --concurrency 16 --max-per-host 4 \
+  --pending-high-watermark 1000 --pending-low-watermark 750 \
+  --depth 2 --max-pages 10000 http://127.0.0.1:PORT/
+./build/fluxcrawl --unbounded-pending --depth 2 --max-pages 1000 https://example.test/
+```
+
+A high watermark alone derives low=floor(75% of high). Enabled high must be
+positive and low must be smaller. Explicit unbounded mode conflicts with watermark
+flags. The original engine-comparison benchmark explicitly disables admission;
+`tools/backpressure_benchmark.py` measures the separate high-fanout scenario.
+
+The hard queue bound covers ordinary ready work, delayed retries and robots-held
+resources globally. Active requests are excluded from queued counts but retain a
+reservation, so an active failure can always return as a delayed retry. New
+admission stops when queued+active reservations reach high and resumes only at
+or below low. There is no overshoot. Robots bootstrap work is exempt so policy
+resolution keeps progressing; max_pages still counts request starts, not admission.
+
+Saturated URLs are **deferred without being marked seen**. Bounded extraction uses
+incremental DOM traversal and a small disk-backed per-document uniqueness index,
+then stores candidates in an append-only local spool. Admission checks capacity,
+exact dedup and queue publication together under the existing coordinator lock.
+FIFO order remains until pressure first activates; thereafter origins rotate at
+each depth. The existing host/depth/retry policies continue to apply.
+
+Threaded producers finish disk publication and return to consuming work; they do
+not all wait as producers for queue capacity. Existing consumer condition-variable
+waits release the coordinator and recheck predicates. Async retains its event-driven
+loop: it yields admission at saturation and continues consuming/completing transfers.
+It never waits on a capacity condition variable. Both use bounded admission quanta;
+slow synchronous persistence writes apply flow control through the existing writer.
+
+Format-two recovery metadata captures deferred disk prefixes alongside accepted
+seen/work state. Spool durability precedes committing their offsets. **A bounded
+snapshot or SQLite database with deferred work requires its referenced
+`*.discovery-*` companion directory.** Manifests currently use absolute paths;
+there is no relocation/export command. Resume validates and forks those prefixes,
+ignores uncommitted suffixes and recomputes pressure. Persistent companion files
+are retained until all referencing recovery points are retired; temporary
+no-persistence spools are cleaned up. Old version-one files still load unbounded.
+
+Summaries report peak queued/unfinished/seen counts, deferred candidates and
+admissions, pressure activations/resumptions, pressure wall time and deferred I/O
+time. SQLite also reports mutation-buffer and queued-batch peaks. Timing categories
+can overlap; pressure wall time is not summed producer wait time.
+
+On the measured 10,021-URL async graph, high=1,000 reduced median peak queued work
+from 10,000 to 996, with RSS 23.9→22.1 MB and elapsed 385→465 ms. At an early
+21-attempt stop, RSS was 13.1→8.9 MB. These local Release results demonstrate queue
+control at a throughput cost; they do not establish a universally optimal limit.
+
+The exact seen set, attempt records, host/partition metadata, response bodies,
+DOMs and database caches remain in memory. Deferred files consume disk and are
+not compacted here. This bounds a major queue-growth source; **it does not strictly
+bound total process memory or disk usage**.
+
+```mermaid
+flowchart TD
+  R[HTTP completion] --> P[DOM callback and temporary disk dedup]
+  P --> D[Deferred disk candidates: unseen]
+  D --> G{Admission capacity available?}
+  G -->|yes| S[Atomic exact seen insertion and scheduling]
+  G -->|saturated| D
+  S --> H[Bounded ready / delayed / robots-held resources]
+  H --> E[Sequential / Threaded / Async consumers]
+  E --> R
+  E --> L[Terminal completion releases reservation]
+  L --> G
+```
+
+See [design, recovery bundle contract, measured results and verification](docs/backpressure.md).
+Opt-in heavy stress stays outside the default suite:
+
+```sh
+python3 tests/backpressure_stress.py ./build-release/fluxcrawl
+# Or configure CTest with -DFLUXCRAWL_SLOW_TESTS=ON, then run -R backpressure.stress.
+```

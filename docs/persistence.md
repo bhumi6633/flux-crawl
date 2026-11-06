@@ -1,5 +1,11 @@
 # Persistent storage experiments and design
 
+Step 16 extends the metadata payload to format two while retaining SQLite schema
+version one. Bounded crawls can reference append-only deferred-discovery companion
+files; preserve them with the database. See the [current admission and recovery
+contract](backpressure.md). Measurements below describe the Step 15 implementation;
+the persistence-only benchmark now explicitly passes `--unbounded-pending`.
+
 ## Step 14 scaling baseline, before SQLite implementation
 
 Release measurement on the local development machine, three samples per size,
