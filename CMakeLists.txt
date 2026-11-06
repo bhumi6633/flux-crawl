@@ -49,3 +49,8 @@ include(CTest)
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()
+
+# Explicit operational storage measurements; excluded from normal engine benchmarks/tests.
+add_executable(fluxcrawl_persistence_scale tools/persistence_scale.cpp)
+target_link_libraries(fluxcrawl_persistence_scale PRIVATE FluxCrawl::core)
+fluxcrawl_enable_warnings(fluxcrawl_persistence_scale)
