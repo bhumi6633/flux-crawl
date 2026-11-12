@@ -214,3 +214,13 @@ if(FLUXCRAWL_SLOW_TESTS)
         "${CMAKE_CURRENT_SOURCE_DIR}/dedup_stress.py" "$<TARGET_FILE:fluxcrawl>")
     set_tests_properties(dedup.stress PROPERTIES TIMEOUT 720 LABELS stress)
 endif()
+
+if(FLUXCRAWL_OBSERVABILITY)
+    add_executable(fluxcrawl_observability_test observability_test.cpp)
+    target_link_libraries(fluxcrawl_observability_test PRIVATE fluxcrawl_observability Boost::json)
+    fluxcrawl_enable_warnings(fluxcrawl_observability_test)
+    add_test(NAME core.observability COMMAND fluxcrawl_observability_test)
+    add_test(NAME observability.integration COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/observability_integration.py" "$<TARGET_FILE:fluxcrawl>" "$<TARGET_FILE:fluxcrawl_observability_test>")
+    set_tests_properties(observability.integration PROPERTIES TIMEOUT 90)
+endif()
