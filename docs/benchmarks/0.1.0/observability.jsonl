@@ -1,0 +1,15 @@
+{"repeat": 0, "mode": "disabled", "interval_ms": null, "elapsed_s": 2.64976, "attempts": 1529, "requests_per_s": 577.03, "cpu_s": 0.25864, "max_rss_bytes": 11452416, "snapshots": 0}
+{"repeat": 0, "mode": "no-clients", "interval_ms": 500, "elapsed_s": 2.6318, "attempts": 1529, "requests_per_s": 580.97, "cpu_s": 0.31563, "max_rss_bytes": 11927552, "snapshots": 0}
+{"repeat": 0, "mode": "client", "interval_ms": 500, "elapsed_s": 2.64402, "attempts": 1529, "requests_per_s": 578.29, "cpu_s": 0.31847, "max_rss_bytes": 12517376, "snapshots": 6}
+{"repeat": 0, "mode": "client", "interval_ms": 100, "elapsed_s": 2.64303, "attempts": 1529, "requests_per_s": 578.5, "cpu_s": 0.31769, "max_rss_bytes": 12681216, "snapshots": 26}
+{"repeat": 0, "mode": "client", "interval_ms": 1000, "elapsed_s": 2.66894, "attempts": 1529, "requests_per_s": 572.89, "cpu_s": 0.29743, "max_rss_bytes": 12271616, "snapshots": 3}
+{"repeat": 1, "mode": "no-clients", "interval_ms": 500, "elapsed_s": 2.67737, "attempts": 1529, "requests_per_s": 571.08, "cpu_s": 0.29838, "max_rss_bytes": 11665408, "snapshots": 0}
+{"repeat": 1, "mode": "client", "interval_ms": 500, "elapsed_s": 2.69089, "attempts": 1529, "requests_per_s": 568.21, "cpu_s": 0.29241, "max_rss_bytes": 12419072, "snapshots": 6}
+{"repeat": 1, "mode": "client", "interval_ms": 100, "elapsed_s": 2.64221, "attempts": 1529, "requests_per_s": 578.68, "cpu_s": 0.3069, "max_rss_bytes": 11960320, "snapshots": 26}
+{"repeat": 1, "mode": "client", "interval_ms": 1000, "elapsed_s": 2.64368, "attempts": 1529, "requests_per_s": 578.36, "cpu_s": 0.29606, "max_rss_bytes": 12713984, "snapshots": 3}
+{"repeat": 1, "mode": "disabled", "interval_ms": null, "elapsed_s": 2.65602, "attempts": 1529, "requests_per_s": 575.67, "cpu_s": 0.29794, "max_rss_bytes": 12091392, "snapshots": 0}
+{"repeat": 2, "mode": "client", "interval_ms": 500, "elapsed_s": 2.66554, "attempts": 1529, "requests_per_s": 573.62, "cpu_s": 0.30371, "max_rss_bytes": 12468224, "snapshots": 6}
+{"repeat": 2, "mode": "client", "interval_ms": 100, "elapsed_s": 2.63585, "attempts": 1529, "requests_per_s": 580.08, "cpu_s": 0.34189, "max_rss_bytes": 12255232, "snapshots": 26}
+{"repeat": 2, "mode": "client", "interval_ms": 1000, "elapsed_s": 2.67452, "attempts": 1529, "requests_per_s": 571.69, "cpu_s": 0.30892, "max_rss_bytes": 12140544, "snapshots": 3}
+{"repeat": 2, "mode": "disabled", "interval_ms": null, "elapsed_s": 2.67879, "attempts": 1529, "requests_per_s": 570.78, "cpu_s": 0.3158, "max_rss_bytes": 11370496, "snapshots": 0}
+{"repeat": 2, "mode": "no-clients", "interval_ms": 500, "elapsed_s": 2.67565, "attempts": 1529, "requests_per_s": 571.45, "cpu_s": 0.31304, "max_rss_bytes": 11468800, "snapshots": 0}

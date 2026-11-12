@@ -290,3 +290,13 @@ target_link_libraries(fluxcrawl_persistence_engine_fault_test PRIVATE FluxCrawl:
 fluxcrawl_enable_warnings(fluxcrawl_persistence_engine_fault_test)
 add_test(NAME certification.engine_write_failure COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/persistence_engine_fault.py" "$<TARGET_FILE:fluxcrawl_persistence_engine_fault_test>")
 set_tests_properties(certification.engine_write_failure PROPERTIES LABELS "integration;concurrency;persistence;recovery" TIMEOUT 45)
+
+# Independent network fixtures share the host's ephemeral ports and timing
+# budget. Keep them isolated even with ctest -j; each test still exercises its
+# own concurrent workers/transfers and multiple clients.
+get_property(fluxcrawl_all_tests DIRECTORY PROPERTY TESTS)
+foreach(test IN LISTS fluxcrawl_all_tests)
+    if(test MATCHES "integration|stress|^cli[.](crawl|threaded|async|checkpoint|robots|retry|scheduling)|^benchmark[.]server_graph|^core[.](http_client|sequential_crawler|thread_pool_crawler|async_crawler|profiling)|^certification[.](lifecycle|http_chaos|engine_write_failure)")
+        set_tests_properties(${test} PROPERTIES RESOURCE_LOCK fluxcrawl_loopback)
+    endif()
+endforeach()

@@ -1,0 +1,23 @@
+{
+  "fluxcrawl": "0.1.0",
+  "compiler": "Apple LLVM 16.0.0 (clang-1600.0.26.6)",
+  "libcurl": "libcurl/8.7.1 SecureTransport (LibreSSL/3.3.6) zlib/1.2.12 nghttp2/1.62.0",
+  "sqlite": "3.43.2",
+  "libxml2": "20913",
+  "os": "Darwin",
+  "os_release": "24.0.0",
+  "architecture": "arm64",
+  "logical_cores": 8,
+  "build": "Release",
+  "runs": 3,
+  "warmups": 1,
+  "parallelism": [
+    1,
+    4,
+    16
+  ],
+  "pages": 100,
+  "commit": "d28b747863768830ee2dd07187270f7d1ae26aae",
+  "cpu_model": "Apple M3",
+  "fixture_python": "3.12.4"
+}

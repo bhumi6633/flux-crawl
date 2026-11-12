@@ -1,0 +1,4 @@
+{"target": "url", "seconds": 15, "executions": 3819339, "returncode": 0, "artifacts": 0}
+{"target": "resolve", "seconds": 15, "executions": 1492787, "returncode": 0, "artifacts": 0}
+{"target": "robots", "seconds": 15, "executions": 390524, "returncode": 0, "artifacts": 0}
+{"target": "checkpoint", "seconds": 15, "executions": 395404, "returncode": 0, "artifacts": 0}

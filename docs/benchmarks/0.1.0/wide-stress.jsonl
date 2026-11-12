@@ -1,0 +1,4 @@
+{"engine": "threaded", "round": 1, "concurrency": 32, "delay_ms": 200, "rate_per_host": 100, "burst": 16, "logical_urls": 2021, "attempts": 2139, "recovered": 118, "global_peak": 32, "per_origin_peak": [12, 13, 12], "peak_unfinished": 128}
+{"engine": "async", "round": 1, "concurrency": 32, "delay_ms": 200, "rate_per_host": 100, "burst": 16, "logical_urls": 2021, "attempts": 2139, "recovered": 118, "global_peak": 32, "per_origin_peak": [12, 13, 13], "peak_unfinished": 128}
+{"engine": "threaded", "round": 2, "concurrency": 32, "delay_ms": 200, "rate_per_host": 100, "burst": 16, "logical_urls": 2021, "attempts": 2139, "recovered": 118, "global_peak": 32, "per_origin_peak": [13, 12, 12], "peak_unfinished": 128}
+{"engine": "async", "round": 2, "concurrency": 32, "delay_ms": 200, "rate_per_host": 100, "burst": 16, "logical_urls": 2021, "attempts": 2139, "recovered": 118, "global_peak": 32, "per_origin_peak": [13, 15, 12], "peak_unfinished": 128}
