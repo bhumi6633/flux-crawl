@@ -29,6 +29,10 @@ Node 22.16.0. All fixtures bind loopback and use temporary state.
   suite passed on the subsequent run without competing compilation. No timing
   assertion was weakened and no existing tests were modified.
 
+CI now installs Boost.JSON on Ubuntu 24.04 and separately checks/builds the
+frontend with Node 22. The GitHub-hosted jobs were not executed from this local
+session.
+
 Browser setup found no connected browsers (empty browser list). **Visual/browser
 QA was not available.** Production index and all built assets were verified over
 HTTP, and actual RFC6455 clients verified live data, disconnects and final state.
@@ -83,6 +87,7 @@ flow, not browser appearance.
 ## Changed file tree
 
 ```text
+.github/workflows/ci.yml               Boost dependency and separate frontend job
 CMakeLists.txt                         core source, optional Boost server target
 .gitignore                            frontend build/dependency exclusions
 README.md                             dependencies and Live Observability
