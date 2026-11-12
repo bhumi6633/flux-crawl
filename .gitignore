@@ -57,3 +57,7 @@ __pycache__/
 
 # Local append-only deferred-discovery companion directories
 *.discovery-*/
+
+# Frontend dependencies and reproducible dashboard build output
+node_modules/
+/dashboard/dist/
