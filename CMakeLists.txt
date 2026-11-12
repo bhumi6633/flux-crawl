@@ -53,9 +53,22 @@ target_link_libraries(fluxcrawl_core PRIVATE CURL::libcurl LibXml2::LibXml2 Thre
 target_compile_definitions(fluxcrawl_core PRIVATE FLUXCRAWL_BUILD_TYPE="$<CONFIG>")
 fluxcrawl_enable_warnings(fluxcrawl_core)
 
+option(FLUXCRAWL_OBSERVABILITY "Build loopback HTTP/WebSocket observability server" ON)
+if(FLUXCRAWL_OBSERVABILITY)
+    find_package(Boost 1.81 CONFIG REQUIRED COMPONENTS json)
+    add_library(fluxcrawl_observability src/observability_server.cpp src/observability_json.cpp)
+    target_link_libraries(fluxcrawl_observability PUBLIC FluxCrawl::core PRIVATE Boost::json Threads::Threads)
+    target_compile_definitions(fluxcrawl_observability PRIVATE FLUXCRAWL_DASHBOARD_ASSETS="${CMAKE_CURRENT_SOURCE_DIR}/dashboard/dist")
+    fluxcrawl_enable_warnings(fluxcrawl_observability)
+endif()
+
 add_executable(fluxcrawl src/main.cpp src/benchmark_cli.cpp src/checkpoint_cli.cpp)
 target_link_libraries(fluxcrawl PRIVATE FluxCrawl::core)
 fluxcrawl_enable_warnings(fluxcrawl)
+if(FLUXCRAWL_OBSERVABILITY)
+    set_property(TARGET fluxcrawl PROPERTY LINK_LIBRARIES fluxcrawl_observability)
+    target_compile_definitions(fluxcrawl PRIVATE FLUXCRAWL_OBSERVABILITY=1)
+endif()
 
 include(CTest)
 if(BUILD_TESTING)
