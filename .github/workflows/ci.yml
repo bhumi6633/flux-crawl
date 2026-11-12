@@ -1,26 +1,87 @@
 name: Build and test
-
 on:
   push:
   pull_request:
-
+  workflow_dispatch:
+    inputs:
+      heavy:
+        description: Run opt-in high-fanout and persistent stress
+        type: boolean
+        default: false
 permissions:
   contents: read
-
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            compiler: g++
+            config: Release
+          - os: ubuntu-24.04
+            compiler: clang++
+            config: Debug
+          - os: macos-14
+            compiler: clang++
+            config: Release
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install dependencies and test interpreter
-        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev libxml2-dev libsqlite3-dev libboost-json-dev python3
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y g++ clang libcurl4-openssl-dev libxml2-dev libsqlite3-dev libboost-json-dev python3
+      - name: macOS dependencies
+        if: runner.os == 'macOS'
+        run: brew install boost
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        run: cmake -S . -B build -DCMAKE_CXX_COMPILER=${{ matrix.compiler }} -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DFLUXCRAWL_WARNINGS_AS_ERRORS=ON
       - name: Build
         run: cmake --build build --parallel 2
       - name: Test
-        run: ctest --test-dir build --output-on-failure
-
+        run: ctest --test-dir build --output-on-failure --parallel 2
+  sanitizers:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [address-undefined, thread]
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y clang libcurl4-openssl-dev libxml2-dev libsqlite3-dev libboost-json-dev python3
+      - run: cmake -S . -B build -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Debug -DFLUXCRAWL_SANITIZER=${{ matrix.sanitizer }}
+      - run: cmake --build build --parallel 2
+      - name: Address/undefined/leak suite
+        if: matrix.sanitizer == 'address-undefined'
+        env:
+          ASAN_OPTIONS: detect_leaks=1
+        run: ctest --test-dir build --output-on-failure --parallel 2
+      - name: Threaded ownership and metrics suite
+        if: matrix.sanitizer == 'thread'
+        run: ctest --test-dir build -L concurrency --output-on-failure
+  fuzz:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y clang libcurl4-openssl-dev libxml2-dev libsqlite3-dev python3
+      - run: cmake -S . -B build-fuzz -DCMAKE_CXX_COMPILER=clang++ -DFLUXCRAWL_ENABLE_FUZZING=ON -DFLUXCRAWL_OBSERVABILITY=OFF -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=RelWithDebInfo
+      - run: cmake --build build-fuzz --parallel 2
+      - run: python3 tools/fuzz_smoke.py --seconds 10
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-artifacts
+          path: build-fuzz/fuzz/artifacts
+  heavy:
+    if: github.event_name == 'workflow_dispatch' && inputs.heavy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y g++ libcurl4-openssl-dev libxml2-dev libsqlite3-dev libboost-json-dev python3
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DFLUXCRAWL_SLOW_TESTS=ON
+      - run: cmake --build build --parallel 2
+      - run: ctest --test-dir build -L stress --output-on-failure
   dashboard:
     runs-on: ubuntu-24.04
     steps:
@@ -35,4 +96,4 @@ jobs:
         run: npm ci
       - name: Type-check and build dashboard
         working-directory: dashboard
-        run: npm run typecheck && npm run build
+        run: npm run test && npm run typecheck && npm run build
