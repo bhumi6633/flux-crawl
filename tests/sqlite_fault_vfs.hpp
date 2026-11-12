@@ -2,6 +2,8 @@
 #include "fault_plan.hpp"
 #include <sqlite3.h>
 #include <cstddef>
+#include <string>
+#include <string_view>
 namespace certification {
 // Scoped wrapper of the platform VFS: inject a REAL SQLite write error without
 // filling disk or modifying production connection code. All other I/O delegates.
@@ -9,12 +11,16 @@ class FaultVfs {
     struct File { sqlite3_file base; sqlite3_file* real; };
     inline static FaultPlan plan_;
     inline static int error_=SQLITE_FULL;
+    inline static std::string marker_;
     sqlite3_vfs wrapped_{};
     sqlite3_vfs* original_;
     static File* file(sqlite3_file* f) { return reinterpret_cast<File*>(f); }
     static int close(sqlite3_file* f) { auto* r=file(f)->real; const auto code=r->pMethods->xClose(r); f->pMethods=nullptr; return code; }
     static int read(sqlite3_file* f,void* p,int n,sqlite3_int64 o) { auto* r=file(f)->real; return r->pMethods->xRead(r,p,n,o); }
-    static int write(sqlite3_file* f,const void* p,int n,sqlite3_int64 o) { if(plan_.fires()) {return error_;} auto* r=file(f)->real; return r->pMethods->xWrite(r,p,n,o); }
+    static int write(sqlite3_file* f,const void* p,int n,sqlite3_int64 o) { if(plan_.fires()) {return error_;}
+        if(!marker_.empty() && std::string_view{static_cast<const char*>(p),static_cast<std::size_t>(n)}.find(marker_)!=std::string_view::npos) {
+            marker_.clear(); return error_;
+        } auto* r=file(f)->real; return r->pMethods->xWrite(r,p,n,o); }
     static int truncate(sqlite3_file* f,sqlite3_int64 n) { auto* r=file(f)->real; return r->pMethods->xTruncate(r,n); }
     static int sync(sqlite3_file* f,int n) { auto* r=file(f)->real; return r->pMethods->xSync(r,n); }
     static int size(sqlite3_file* f,sqlite3_int64* n) { auto* r=file(f)->real; return r->pMethods->xFileSize(r,n); }
@@ -44,7 +50,10 @@ public:
         wrapped_.pAppData=original_; wrapped_.szOsFile+=static_cast<int>(sizeof(File)); wrapped_.xOpen=open;
         if(sqlite3_vfs_register(&wrapped_,1)!=SQLITE_OK) { throw std::runtime_error("VFS registration failed"); }
     }
-    ~FaultVfs() { plan_.remaining=0; sqlite3_vfs_register(original_,1); sqlite3_vfs_unregister(&wrapped_); }
-    void arm(int error,std::size_t nth=1) { error_=error; plan_.arm(nth); }
+    ~FaultVfs() { marker_.clear(); plan_.remaining=0; sqlite3_vfs_register(original_,1); sqlite3_vfs_unregister(&wrapped_); }
+    // The small metadata page identifies sequence 1 independently of SQLite's
+    // initialization write count. Fail its first WAL write, never initial create.
+    void arm_first_commit(int error) { error_=error; marker_="sequence 1\n"; }
+    void arm(int error,std::size_t nth=1) { marker_.clear(); error_=error; plan_.arm(nth); }
 };
 }
