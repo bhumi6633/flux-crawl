@@ -74,6 +74,9 @@ if __name__=='__main__':
       clients=[]
       try:
         clients=[Client(port) for _ in range(4)]
+        # Repeated abrupt client exits must not retain sessions or affect work.
+        for _ in range(6):
+            transient=Client(port); transient.snapshot(); transient.close()
         # Three non-reading clients exercise bounded writes while one consumes.
         states=[]; sequences=set(); saw_active=False; max_payload=0
         deadline=time.monotonic()+20
