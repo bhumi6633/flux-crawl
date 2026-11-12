@@ -55,15 +55,21 @@ bool TokenBucket::consume(Time now)
     if (limit_) { tokens_ -= 1; }
     return true;
 }
-HostScheduler::HostScheduler(std::size_t global_limit, SchedulingOptions options, bool track_active, bool cold_limits)
-    : track_active_{track_active}, cold_limits_{cold_limits}, options_{options}, global_limit_{global_limit}
+HostScheduler::HostScheduler(std::size_t global_limit, SchedulingOptions options, bool track_active, bool cold_limits, bool telemetry)
+    : track_active_{track_active}, cold_limits_{cold_limits}, telemetry_{telemetry}, options_{options}, global_limit_{global_limit}
 {
     if (global_limit == 0 || (options.max_per_host && *options.max_per_host == 0)) {
         throw std::invalid_argument("Global and per-host concurrency limits must be positive");
     }
     (void)TokenBucket{options.rate}; // Validate even if no work is attempted.
 }
-void HostScheduler::mark_terminal(const CrawlItem& item) { if (sink_) { sink_->completed(item); } }
+void HostScheduler::mark_terminal(const CrawlItem& item) {
+    if (telemetry_) {
+        const auto found = hosts_.find(HostKey::from(item.url));
+        if (found != hosts_.end()) { ++found->second.completed; }
+    }
+    if (sink_) { sink_->completed(item); }
+}
 void HostScheduler::note_activity() { if (sink_) { sink_->activity(); } }
 void HostScheduler::enqueue(CrawlItem item)
 {
@@ -87,6 +93,7 @@ void HostScheduler::enqueue(CrawlItem item)
         if (count->second == 0) { depths_.erase(count); }
         throw;
     }
+    ++host.pending;
     ++count->second;
     ++pending_;
     if (infrastructure) { ++infrastructure_pending_; }
@@ -97,8 +104,11 @@ void HostScheduler::delay(CrawlItem item, Time eligible_at)
     const auto depth = item.depth;
     const bool infrastructure = item.policy_request;
     auto [count, inserted] = depths_.try_emplace(depth, 0);
+    auto [host, created] = hosts_.try_emplace(HostKey::from(item.url), options_.rate);
+    if (created && cold_limits_) { host->second.bucket.start_empty(Clock::now()); }
     try { delayed_.emplace(eligible_at, std::move(item)); }
     catch (...) { if (inserted) { depths_.erase(count); } throw; }
+    ++host->second.delayed;
     ++count->second;
     ++pending_;
     if (infrastructure) { ++infrastructure_pending_; }
@@ -110,6 +120,7 @@ void HostScheduler::promote(Time now)
         const auto depth = entry->second.depth;
         // Copy first: allocation failure preserves the delayed entry.
         enqueue(entry->second);
+        --hosts_.at(HostKey::from(entry->second.url)).delayed;
         --pending_;
         if (entry->second.policy_request) { --infrastructure_pending_; }
         --depths_.at(depth);
@@ -142,6 +153,7 @@ std::optional<HostScheduler::Lease> HostScheduler::acquire(Time now)
         if (host->queues.empty()) { ready_.pop_back(); }
         if (--depths_.begin()->second == 0) { depths_.erase(depths_.begin()); }
         --pending_;
+        --host->pending;
         if (lease.item.policy_request) { --infrastructure_pending_; }
         ++active_;
         ++host->active;
@@ -196,3 +208,23 @@ void HostScheduler::Lease::release() noexcept
     if (owner_) { std::exchange(owner_, nullptr)->finish(*host_, id_); }
 }
 } // namespace fluxcrawl
+
+namespace fluxcrawl {
+HostScheduler::Sample HostScheduler::sample(Time now, std::size_t limit)
+{
+    Sample out; out.total_hosts = hosts_.size();
+    if (!delayed_.empty()) { out.next_retry_ms = std::max(0.0, std::chrono::duration<double, std::milli>(delayed_.begin()->first-now).count()); }
+    for (auto& [key, host] : hosts_) {
+        if (out.candidates++ == 256) { --out.candidates; break; }
+        const auto origin = key.scheme + "://" + (key.host.find(':') != std::string::npos ? "[" + key.host + "]" : key.host) + ":" + std::to_string(key.effective_port);
+        out.hosts.push_back({origin, host.pending + host.delayed, host.active, host.delayed, host.completed,
+            std::max(0.0, std::chrono::duration<double, std::milli>(host.bucket.eligible_at(now)-now).count())});
+    }
+    std::sort(out.hosts.begin(), out.hosts.end(), [](const auto& a, const auto& b) {
+        const auto aw = a.pending+a.active, bw = b.pending+b.active;
+        return aw != bw ? aw > bw : a.origin < b.origin;
+    });
+    out.hosts.resize(std::min(limit, out.hosts.size()));
+    return out;
+}
+}

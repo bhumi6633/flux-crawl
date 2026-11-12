@@ -13,6 +13,7 @@ public:
     struct Report { CheckpointRuntime::Report snapshot; PersistenceMetrics database; std::string error; bool is_database = false; };
     PersistenceRuntime(const Url& seed, const CrawlOptions& options, const HttpClientOptions& http);
     void initialize(CrawlState& state, HostScheduler& scheduler, CrawlPolicy& policy, CrawlResult& result);
+    std::size_t pending_mutations() const { return journal_.operations(); }
     bool stop(const CrawlResult& result) const { return failed_.load() || snapshots_.stop(result); }
     std::optional<Request> capture(CrawlState& state, const HostScheduler& scheduler, const CrawlPolicy& policy, const CrawlResult& result, bool final = false);
     Report write(const Request& request);

@@ -4,6 +4,8 @@
 #include "crawl_processing.hpp"
 #include "profile_timer.hpp"
 #include "persistence_runtime.hpp"
+#include <fluxcrawl/observability.hpp>
+#include "observability_sampler.hpp"
 #include <algorithm>
 
 #include <condition_variable>
@@ -19,8 +21,16 @@ namespace {
 class Coordinator {
 public:
     Coordinator(const Url& seed, const CrawlOptions& options, std::size_t workers, const HttpClientOptions& http)
-        : seed_{seed}, options_{options}, state_{seed, options.max_depth, options.backpressure, options.dedup}, scheduler_{workers, options.scheduling, detail::persistence_enabled(options), bool(options.resume_from)}, policy_{options.respect_robots}, checkpoints_{seed, options, http}
-    { checkpoints_.initialize(state_, scheduler_, policy_, result_); }
+        : seed_{seed}, options_{options}, state_{seed, options.max_depth, options.backpressure, options.dedup}, scheduler_{workers, options.scheduling, detail::persistence_enabled(options), bool(options.resume_from), bool(options.observability)}, policy_{options.respect_robots}, checkpoints_{seed, options, http}
+    {
+        if (options_.observability) { options_.observability->begin("threaded", workers); }
+        checkpoints_.initialize(state_, scheduler_, policy_, result_);
+        observe();
+    }
+    void observe(bool final = false) {
+        if (options_.observability) { options_.observability->capture(state_, scheduler_, policy_, result_, options_, final, checkpoints_.pending_mutations()); }
+    }
+    void sample() { std::lock_guard lock{mutex_}; observe(); }
 
     std::optional<HostScheduler::Lease> acquire(WorkerProfile* profile)
     {
@@ -35,6 +45,7 @@ public:
                 try { report = checkpoints_.write(*snapshot); } catch (...) { lock.lock(); throw; }
                 lock.lock(); detail::PersistenceRuntime::report(result_, std::move(report));
             }
+            observe();
             if (fatal_ || result_.pages_attempted == options_.max_pages || checkpoints_.stop(result_)) { return std::nullopt; }
             {
                 auto claim = [&] {
@@ -43,6 +54,7 @@ public:
                 }();
                 if (claim) {
                     detail::reserve_attempt(result_, claim->item);
+                    observe();
                     if (profile) { max_active_ = std::max(max_active_, scheduler_.active()); }
                     if (auto snapshot = checkpoints_.capture(state_, scheduler_, policy_, result_)) {
                         lock.unlock();
@@ -60,6 +72,7 @@ public:
             const auto deadline = scheduler_.next_deadline(HostScheduler::Clock::now());
             detail::ProfileTimer timer{profile ? &profile->idle : nullptr};
             if (profile) { ++profile->waits; }
+            if (options_.observability) { options_.observability->worker_wait(); }
             if (deadline) { changed_.wait_until(lock, *deadline); }
             else { changed_.wait(lock); }
             if (profile) { ++profile->wakeups; }
@@ -78,6 +91,7 @@ public:
                 policy_.schedule(state_, scheduler_, result_, profile ? &profile->common : nullptr);
             }
             claim.release();
+            observe();
         }
         // Multiple new items or a depth transition can make every waiter runnable.
         changed_.notify_all();
@@ -109,6 +123,7 @@ public:
         }
         result_.pressure = state_.pressure_metrics();
         result_.dedup = state_.dedup_metrics();
+        observe(true);
         return std::move(result_);
     }
 
@@ -118,7 +133,9 @@ private:
         std::unique_lock lock{mutex_, std::defer_lock};
         {
             detail::ProfileTimer timer{profile ? &profile->lock_wait : nullptr};
+            const auto began = options_.observability ? HostScheduler::Clock::now() : HostScheduler::Time{};
             lock.lock();
+            if (options_.observability) { options_.observability->lock_wait(HostScheduler::Clock::now()-began); }
         }
         if (profile) { ++profile->lock_acquisitions; }
         return lock;
@@ -153,12 +170,17 @@ CrawlResult ThreadPoolCrawler::crawl(const Url& seed, const CrawlOptions& option
     const HtmlLinkExtractor initialized_parser;
     (void)initialized_parser;
     Coordinator coordinator{seed, options, workers_, client_.options()};
+    std::unique_ptr<detail::ObservabilitySampler> sampler;
+    if (options.observability) {
+        sampler=std::make_unique<detail::ObservabilitySampler>(options.observability->interval(), [&] { coordinator.sample(); });
+    }
     std::optional<ThreadProfile> profile;
     if (options.profile) { profile.emplace(); }
     if (options.max_pages == 0) {
+        sampler.reset();
         auto result = coordinator.finish();
         if (profile) { result.profile.emplace(); result.profile->threaded = std::move(profile); }
-    result.elapsed = std::chrono::steady_clock::now() - started;
+        result.elapsed = std::chrono::steady_clock::now() - started;
         return result;
     }
     if (profile) { profile->workers.resize(workers_); }
@@ -190,6 +212,7 @@ CrawlResult ThreadPoolCrawler::crawl(const Url& seed, const CrawlOptions& option
         coordinator.fail(std::current_exception(), nullptr);
     }
     for (auto& worker : workers) { worker.join(); }
+    sampler.reset();
     auto result = coordinator.finish();
     if (profile) {
         for (const auto& worker : profile->workers) { profile->total.merge(worker); }

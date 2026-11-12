@@ -73,7 +73,7 @@ public:
         Host* host_;
         std::uint64_t id_;
     };
-    explicit HostScheduler(std::size_t global_limit, SchedulingOptions options = {}, bool track_active = false, bool cold_limits = false);
+    explicit HostScheduler(std::size_t global_limit, SchedulingOptions options = {}, bool track_active = false, bool cold_limits = false, bool telemetry = false);
     [[nodiscard]] std::vector<Work> snapshot() const;
     HostScheduler(const HostScheduler&) = delete;
     HostScheduler& operator=(const HostScheduler&) = delete;
@@ -82,6 +82,18 @@ public:
     void note_activity();
     void enqueue(CrawlItem item);
     void delay(CrawlItem item, Time eligible_at);
+    struct HostSample {
+        std::string origin;
+        std::size_t pending = 0, active = 0, delayed = 0, completed = 0;
+        double wait_ms = 0;
+    };
+    struct Sample {
+        std::size_t total_hosts = 0, candidates = 0;
+        std::vector<HostSample> hosts;
+        std::optional<double> next_retry_ms;
+    };
+    // Bounded candidate scan, never copies queued URLs. Call under owner lock.
+    [[nodiscard]] Sample sample(Time now, std::size_t limit = 32);
     [[nodiscard]] std::size_t delayed() const noexcept { return delayed_.size(); }
     [[nodiscard]] std::optional<Lease> acquire(Time now);
     // Minimum delayed-work deadline and applicable host token deadline.
@@ -96,13 +108,13 @@ private:
         explicit Host(std::optional<RateLimit> rate) : bucket{rate} {}
         std::map<std::size_t, std::deque<CrawlItem>> queues;
         TokenBucket bucket;
-        std::size_t active = 0;
+        std::size_t active = 0, pending = 0, delayed = 0, completed = 0;
     };
     void promote(Time now);
     bool depth_eligible() const noexcept;
     void finish(Host& host, std::uint64_t id) noexcept;
     CrawlMutationSink* sink_ = nullptr;
-    bool track_active_, cold_limits_;
+    bool track_active_, cold_limits_, telemetry_;
     std::uint64_t next_id_ = 0;
     std::map<std::uint64_t, CrawlItem> active_items_;
     SchedulingOptions options_;

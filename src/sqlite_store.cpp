@@ -232,7 +232,7 @@ void SqliteStore::apply_with_hook(const CrawlMutationBatch& batch, const std::fu
     p.stats.seen_insertions += batch.discoveries.size();
     ++p.stats.transactions; p.stats.mutations += batch.operations; p.stats.row_changes += row_changes + 2;
     p.committed.store(batch.metadata.sequence);
-    p.stats.commit_time += elapsed; p.stats.max_commit_time = std::max(p.stats.max_commit_time, elapsed);
+    p.stats.last_commit_time = elapsed; p.stats.commit_time += elapsed; p.stats.max_commit_time = std::max(p.stats.max_commit_time, elapsed);
 }
 CrawlCheckpoint SqliteStore::load()
 {

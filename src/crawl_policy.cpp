@@ -35,6 +35,8 @@ void CrawlPolicy::accept(HostScheduler::Work work, HostScheduler& scheduler, Cra
         ++result.robots_origins;
     }
     entry.waiting.push_back(std::move(work));
+    ++held_;
+    if (inserted) { ++waiting_hosts_; }
 }
 void CrawlPolicy::admit(HostScheduler::Work work, const Entry& entry, HostScheduler& scheduler, CrawlResult& result)
 {
@@ -70,6 +72,8 @@ void CrawlPolicy::resolve(const CrawlRecord& bootstrap, std::optional<RobotsPoli
         ++result.robots_fetch_failures;
     }
     for (auto& item : entry.waiting) { admit(std::move(item), entry, scheduler, result); }
+    held_ -= entry.waiting.size();
+    --waiting_hosts_;
     entry.waiting.clear();
 }
 std::vector<HostScheduler::Work> CrawlPolicy::snapshot() const
@@ -83,11 +87,5 @@ std::vector<HostScheduler::Work> CrawlPolicy::snapshot() const
         return a.item.url.str() < b.item.url.str();
     });
     return work;
-}
-std::size_t CrawlPolicy::held() const noexcept
-{
-    std::size_t count = 0;
-    for (const auto& [key, entry] : entries_) { (void)key; count += entry.waiting.size(); }
-    return count;
 }
 } // namespace fluxcrawl

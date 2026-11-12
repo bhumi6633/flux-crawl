@@ -41,6 +41,7 @@ add_library(fluxcrawl_core
     src/sequential_crawler.cpp
     src/thread_pool_crawler.cpp
     src/async_crawler.cpp
+    src/observability.cpp
     src/metrics.cpp
     src/benchmark.cpp
     src/benchmark_server_client.cpp

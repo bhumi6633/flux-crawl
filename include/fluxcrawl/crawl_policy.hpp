@@ -16,7 +16,8 @@ public:
                  HostScheduler& scheduler, CrawlResult& result);
     void accept(HostScheduler::Work work, HostScheduler& scheduler, CrawlResult& result);
     [[nodiscard]] std::vector<HostScheduler::Work> snapshot() const;
-    [[nodiscard]] std::size_t held() const noexcept;
+    [[nodiscard]] std::size_t held() const noexcept { return held_; }
+    [[nodiscard]] std::size_t waiting_hosts() const noexcept { return waiting_hosts_; }
 private:
     struct Entry {
         State state = State::Fetching;
@@ -27,6 +28,7 @@ private:
     };
     void admit(HostScheduler::Work work, const Entry& entry, HostScheduler& scheduler, CrawlResult& result);
     bool enabled_;
+    std::size_t held_ = 0, waiting_hosts_ = 0;
     std::unordered_map<HostKey, Entry, HostKeyHash> entries_;
 };
 } // namespace fluxcrawl

@@ -13,6 +13,6 @@ struct PersistenceMetrics {
     std::size_t buffered_mutations_peak = 0, queued_batches_peak = 0;
     std::size_t seen_insertions = 0, seen_constraint_conflicts = 0;
     std::size_t transactions = 0, mutations = 0, row_changes = 0, file_bytes = 0;
-    std::chrono::nanoseconds commit_time{}, max_commit_time{}, initialization_time{};
+    std::chrono::nanoseconds commit_time{}, last_commit_time{}, max_commit_time{}, initialization_time{};
 };
 } // namespace fluxcrawl

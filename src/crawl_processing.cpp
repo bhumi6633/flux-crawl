@@ -1,5 +1,6 @@
 #include "crawl_processing.hpp"
 #include "profile_timer.hpp"
+#include <fluxcrawl/observability.hpp>
 
 #include <fluxcrawl/html_parser.hpp>
 #include <utility>
@@ -50,6 +51,7 @@ void publish_page(CrawlState& state, CrawlResult& result, ProcessedPage page,
                   const Url& seed, const CrawlOptions& options, HostScheduler& scheduler, CrawlPolicy& policy, CommonProfile* profile)
 {
     scheduler.note_activity();
+    if (options.observability) { options.observability->request_finished(page.record); }
     const bool bootstrap = page.record.item.policy_request;
     const auto* response = std::get_if<CrawlResponseMetadata>(&page.record.outcome);
     const auto* error = std::get_if<HttpError>(&page.record.outcome);
@@ -111,6 +113,7 @@ void publish_page(CrawlState& state, CrawlResult& result, ProcessedPage page,
         ProfileTimer timer{profile ? &profile->discovery : nullptr};
         const auto offer = [&](const Url& link) {
             if (profile) { ++profile->links_considered; }
+            if (options.observability) { options.observability->discovery(page.record.item.url, link); }
             if (!options.same_host_only || link.host() == seed.host()) {
                 if (options.backpressure.enabled || options.dedup.mode != DedupMode::Memory) { state.defer(link, page.record.item.depth + 1); }
                 else {

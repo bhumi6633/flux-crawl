@@ -2,6 +2,7 @@
 #include "crawl_processing.hpp"
 #include "profile_timer.hpp"
 #include "persistence_runtime.hpp"
+#include <fluxcrawl/observability.hpp>
 #include <algorithm>
 #include "curl_transfer.hpp"
 
@@ -100,12 +101,17 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
 {
     options.retry.validate(); options.backpressure.validate();
     const auto started = std::chrono::steady_clock::now();
+    if (options.observability) { options.observability->begin("async", concurrency_); }
     CrawlState state{seed, options.max_depth, options.backpressure, options.dedup};
-    HostScheduler scheduler{concurrency_, options.scheduling, detail::persistence_enabled(options), bool(options.resume_from)};
+    HostScheduler scheduler{concurrency_, options.scheduling, detail::persistence_enabled(options), bool(options.resume_from), bool(options.observability)};
     CrawlPolicy policy{options.respect_robots};
     CrawlResult result;
     detail::PersistenceRuntime checkpoints{seed, options, http_options_};
     checkpoints.initialize(state, scheduler, policy, result);
+    const auto observe = [&](bool final = false) {
+        if (options.observability) { options.observability->capture(state, scheduler, policy, result, options, final, checkpoints.pending_mutations()); }
+    };
+    observe();
     if (options.profile) { result.profile.emplace(); result.profile->async.emplace(); }
     auto* common = result.profile ? &result.profile->common : nullptr;
     auto* profile = result.profile ? &*result.profile->async : nullptr;
@@ -117,6 +123,7 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
         policy.schedule(state, scheduler, result, common);
     };
     const auto checkpoint = [&](bool final = false) {
+        observe();
         const auto started_checkpoint = detail::persistence_enabled(options) ? HostScheduler::Clock::now() : HostScheduler::Time{};
         if (auto snapshot = checkpoints.capture(state, scheduler, policy, result, final)) {
             detail::PersistenceRuntime::report(result, checkpoints.write(*snapshot));
@@ -159,13 +166,14 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
     while (!transfers.active.empty() || ((scheduler.pending() != 0 || state.has_deferred()) && result.pages_attempted < options.max_pages && !checkpoints.stop(result))) {
         if (transfers.active.empty()) {
             if (const auto deadline = scheduler.next_deadline(HostScheduler::Clock::now())) {
-                std::this_thread::sleep_until(*deadline);
+                std::this_thread::sleep_until(options.observability ? std::min(*deadline, HostScheduler::Clock::now()+options.observability->interval()) : *deadline);
             }
             (void)fill();
             checkpoint();
             if (transfers.active.empty()) { continue; }
         }
         if (profile) { ++profile->iterations; }
+        if (options.observability) { options.observability->loop_iteration(); }
         int running = 0;
         check_multi(curl_multi_perform(transfers.handle, &running));
         {
@@ -198,7 +206,10 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
                     timeout_ms = static_cast<int>(std::clamp<decltype(delay)>(delay, 1, 1000));
                 }
             }
+            if (options.observability) { timeout_ms = std::min(timeout_ms, static_cast<int>(options.observability->interval().count())); }
+            const auto wait_started = options.observability ? HostScheduler::Clock::now() : HostScheduler::Time{};
             check_multi(curl_multi_poll(transfers.handle, nullptr, 0, timeout_ms, nullptr));
+            if (options.observability) { options.observability->loop_wait(HostScheduler::Clock::now()-wait_started); }
         }
     }
     transfers.close();
@@ -211,6 +222,7 @@ CrawlResult AsyncCrawler::crawl(const Url& seed, CrawlOptions options) const
     result.pressure = state.pressure_metrics();
     result.dedup = state.dedup_metrics();
     result.elapsed = std::chrono::steady_clock::now() - started;
+    observe(true);
     return result;
 }
 

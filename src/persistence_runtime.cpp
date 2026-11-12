@@ -101,6 +101,7 @@ PersistenceRuntime::Report PersistenceRuntime::write(const Request& request)
     report.database.row_changes = after.row_changes - before.row_changes;
     report.database.commit_time = after.commit_time - before.commit_time;
     report.database.max_commit_time = after.max_commit_time;
+    report.database.last_commit_time = after.last_commit_time;
     if (request.final) { report.database.file_bytes = after.file_bytes; }
     return report;
 }
@@ -112,6 +113,7 @@ void PersistenceRuntime::report(CrawlResult& result, Report report)
     result.persistence.queued_batches_peak = std::max(result.persistence.queued_batches_peak, report.database.queued_batches_peak);
     result.persistence.seen_insertions += report.database.seen_insertions; result.persistence.seen_constraint_conflicts += report.database.seen_constraint_conflicts;
     result.persistence.transactions += report.database.transactions; result.persistence.mutations += report.database.mutations;
+    if (report.database.transactions) { result.persistence.last_commit_time = report.database.last_commit_time; }
     result.persistence.row_changes += report.database.row_changes; result.persistence.commit_time += report.database.commit_time;
     result.persistence.max_commit_time = std::max(result.persistence.max_commit_time, report.database.max_commit_time);
     if (report.database.file_bytes) { result.persistence.file_bytes = report.database.file_bytes; }

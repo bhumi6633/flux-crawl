@@ -106,6 +106,10 @@ void CheckpointRuntime::report(CrawlResult& result, Report report)
 {
     result.checkpoint_time += report.elapsed;
     if (!report.error.empty()) { result.checkpoint_errors.push_back(std::move(report.error)); }
-    else if (report.bytes != 0) { ++result.checkpoints_written; result.checkpoint_bytes = report.bytes; }
+    else if (report.bytes != 0) {
+        ++result.checkpoints_written; result.checkpoint_bytes = report.bytes;
+        result.last_checkpoint_duration = report.elapsed;
+        result.last_checkpoint_unix_ms = wall_now();
+    }
 }
 } // namespace fluxcrawl::detail

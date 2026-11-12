@@ -15,6 +15,8 @@
 
 namespace fluxcrawl {
 
+class Observability;
+
 struct CrawlOptions {
     std::size_t max_depth = 2;
     std::size_t max_pages = 100;
@@ -28,6 +30,7 @@ struct CrawlOptions {
     CheckpointControl checkpoint{};
     SqliteControl sqlite{};
     std::shared_ptr<const CrawlCheckpoint> resume_from{};
+    std::shared_ptr<Observability> observability{};
 };
 
 struct CrawlResponseMetadata {
@@ -61,6 +64,8 @@ struct CrawlResult {
     std::vector<std::string> persistence_errors;
     std::chrono::nanoseconds checkpoint_time{};
     std::size_t checkpoints_written = 0, checkpoint_bytes = 0;
+    std::chrono::nanoseconds last_checkpoint_duration{};
+    std::int64_t last_checkpoint_unix_ms = 0;
     std::vector<std::string> checkpoint_errors; // Session diagnostics, not persisted.
     std::size_t pages_attempted = 0;
     std::size_t responses_received = 0;
