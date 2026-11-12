@@ -61,3 +61,11 @@ __pycache__/
 # Frontend dependencies and reproducible dashboard build output
 node_modules/
 /dashboard/dist/
+
+# Certification/fuzzer captures (intentional corpora live in fuzz/corpus)
+/fuzz-artifacts/
+/soak-results/
+/certification-results/
+/fluxcrawl-*.tar.gz
+*.profraw
+*.profdata

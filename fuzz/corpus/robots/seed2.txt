@@ -1,0 +1,3 @@
+User-agent: FluxCrawl
+Allow: /public/
+Disallow: /

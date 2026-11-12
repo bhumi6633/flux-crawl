@@ -5,6 +5,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+include(cmake/Instrumentation.cmake)
 include(cmake/CompilerWarnings.cmake)
 
 find_package(CURL 7.85 REQUIRED)
@@ -86,3 +87,11 @@ fluxcrawl_enable_warnings(fluxcrawl_dedup_baseline)
 add_executable(fluxcrawl_dedup_scale tools/dedup_scale.cpp)
 target_link_libraries(fluxcrawl_dedup_scale PRIVATE FluxCrawl::core)
 fluxcrawl_enable_warnings(fluxcrawl_dedup_scale)
+
+if(FLUXCRAWL_ENABLE_FUZZING)
+    add_subdirectory(fuzz)
+endif()
+
+add_executable(fluxcrawl_certification_environment tools/certification_environment.cpp)
+target_link_libraries(fluxcrawl_certification_environment PRIVATE FluxCrawl::core CURL::libcurl LibXml2::LibXml2)
+fluxcrawl_enable_warnings(fluxcrawl_certification_environment)
