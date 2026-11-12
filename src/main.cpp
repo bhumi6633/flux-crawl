@@ -7,6 +7,10 @@
 #include <fluxcrawl/thread_pool_crawler.hpp>
 #include <fluxcrawl/async_crawler.hpp>
 
+#ifdef FLUXCRAWL_OBSERVABILITY
+#include <fluxcrawl/observability_server.hpp>
+#endif
+#include <thread>
 #include <charconv>
 #include <limits>
 #include <exception>
@@ -27,6 +31,11 @@ void print_help()
                  "  fluxcrawl resume FILE [execution options]\n"
                  "  fluxcrawl benchmark --help\n\n"
                  "Options:\n"
+                 "  --dashboard          Enable read-only loopback dashboard\n"
+                 "  --dashboard-port N   Port (default: 8080; 0 chooses a free port)\n"
+                 "  --metrics-interval-ms N Sampling interval 100..10000 (default: 500)\n"
+                 "  --dashboard-topology Enable bounded host discovery graph\n"
+                 "  --dashboard-linger-ms N Keep final state available (default: 2000)\n"
                  "  --state-db FILE       New SQLite crawl database (must not exist)\n"
                  "  --db-batch-size N     Logical mutations per batch (default: 100)\n"
                  "  --dedup MODE          memory (default), sqlite or bloom-sqlite\n"
@@ -64,6 +73,10 @@ int main(int argc, char* argv[])
 {
     if (argc > 1 && std::string_view{argv[1]} == "benchmark") { return benchmark_main(argc, argv); }
     if (argc > 1 && std::string_view{argv[1]} == "resume") { return checkpoint_resume_main(argc, argv); }
+    bool dashboard = false, dashboard_option = false;
+    [[maybe_unused]] bool topology = false;
+    [[maybe_unused]] std::size_t dashboard_port = 8080, interval_ms = 500;
+    std::size_t linger_ms = 2000;
     bool show_help = false;
     bool bloom_supplied = false;
     bool pending_high_supplied = false, pending_low_supplied = false, pressure_disabled = false;
@@ -81,7 +94,23 @@ int main(int argc, char* argv[])
 
     for (int index = 1; index < argc; ++index) {
         const std::string_view argument{argv[index]};
-        if (argument == "--help") {
+        if (argument == "--dashboard") { dashboard = true;
+        } else if (argument == "--dashboard-topology") { topology = true; dashboard_option = true;
+        } else if (argument == "--dashboard-port" || argument == "--metrics-interval-ms" || argument == "--dashboard-linger-ms") {
+            dashboard_option = true;
+            if (++index >= argc) { std::cerr << "fluxcrawl: missing dashboard integer.\n"; return 1; }
+            const std::string_view value{argv[index]}; std::size_t number = 0;
+            const auto [end, error] = std::from_chars(value.data(),value.data()+value.size(),number);
+            if (value.empty() || error!=std::errc{} || end!=value.data()+value.size()
+                || (argument=="--dashboard-port" && number>65535)
+                || (argument=="--metrics-interval-ms" && (number<100 || number>10000))
+                || (argument=="--dashboard-linger-ms" && number>60000)) {
+                std::cerr << "fluxcrawl: invalid dashboard integer.\n"; return 1;
+            }
+            if (argument=="--dashboard-port") { dashboard_port=number; }
+            else if (argument=="--metrics-interval-ms") { interval_ms=number; }
+            else { linger_ms=number; }
+        } else if (argument == "--help") {
             show_help = true;
         } else if (argument == "--version") {
             show_version = true;
@@ -222,6 +251,10 @@ int main(int argc, char* argv[])
         }
     }
 
+    if (dashboard_option && !dashboard) { std::cerr << "fluxcrawl: dashboard options require --dashboard.\n"; return 1; }
+#ifndef FLUXCRAWL_OBSERVABILITY
+    if (dashboard) { std::cerr << "fluxcrawl: dashboard was disabled at build time.\n"; return 1; }
+#endif
     try { options.dedup.validate(); } catch(const std::exception& error) {std::cerr<<"fluxcrawl: "<<error.what()<<'\n';return 1;}
     if((bloom_supplied && options.dedup.mode!=fluxcrawl::DedupMode::BloomSqlite) || (options.dedup.mode!=fluxcrawl::DedupMode::Memory && options.sqlite.path.empty())) {
         std::cerr<<"fluxcrawl: Bloom options require bloom-sqlite; SQLite dedup requires --state-db.\n";return 1;
@@ -263,10 +296,25 @@ int main(int argc, char* argv[])
             return 1;
         }
         try {
+#ifdef FLUXCRAWL_OBSERVABILITY
+            std::unique_ptr<fluxcrawl::ObservabilityServer> server;
+            if (dashboard) {
+                options.observability=std::make_shared<fluxcrawl::Observability>(std::chrono::milliseconds{interval_ms},topology);
+                server=std::make_unique<fluxcrawl::ObservabilityServer>(options.observability,static_cast<std::uint16_t>(dashboard_port));
+                std::cout << "Dashboard: http://127.0.0.1:" << server->port() << std::endl;
+            }
+#endif
             const auto result = [&] {
+                try {
                 if (engine == "async") { return fluxcrawl::AsyncCrawler{concurrency}.crawl(*url, options); }
                 if (engine == "threaded") { return fluxcrawl::ThreadPoolCrawler{workers}.crawl(*url, options); }
                 return fluxcrawl::SequentialCrawler{}.crawl(*url, options);
+                } catch (...) {
+#ifdef FLUXCRAWL_OBSERVABILITY
+                    if (options.observability) { options.observability->failed(); std::this_thread::sleep_for(std::chrono::milliseconds{linger_ms}); }
+#endif
+                    throw;
+                }
             }();
             std::cout << "Seed: " << url->canonical() << "\nEngine: " << engine;
             if (engine == "threaded") { std::cout << "\nWorkers: " << workers; }
@@ -319,6 +367,7 @@ int main(int argc, char* argv[])
                     << "\nCheckpoint I/O time ms: " << std::chrono::duration<double, std::milli>(result.checkpoint_time).count() << '\n';
             }
             if (!options.sqlite.path.empty()) { fluxcrawl::detail::print_database_metrics(std::cout, result); }
+            if (dashboard) { std::this_thread::sleep_for(std::chrono::milliseconds{linger_ms}); }
             return result.persistence_errors.empty() && result.checkpoint_errors.empty() && result.robots_fetch_failures == 0 && result.terminal_fetch_failures == 0
                 && (options.retry.max_retries == 0 || result.terminal_http_failures == 0) ? 0 : 1;
         } catch (const std::exception& error) {
