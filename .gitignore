@@ -69,3 +69,5 @@ node_modules/
 /fluxcrawl-*.tar.gz
 *.profraw
 *.profdata
+
+/fluxcrawl-*.tar.gz.sha256

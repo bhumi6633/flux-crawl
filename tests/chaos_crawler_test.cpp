@@ -4,6 +4,7 @@
 #include <fluxcrawl/observability.hpp>
 #include <fluxcrawl/retry_policy.hpp>
 #include <set>
+#include <ctime>
 #include <iostream>
 #include <stdexcept>
 using namespace fluxcrawl;
@@ -38,4 +39,16 @@ int main(int argc,char** argv) try {
         const auto snapshot=options.observability->latest();check(snapshot->active==0,"active slot leaked");
         std::cout<<engine<<": seen="<<result.urls_discovered<<" attempts="<<result.pages_attempted<<" recovered="<<result.responses_recovered_after_retry<<'\n';
     }
+    // Repeated delayed-only states: no active or ready request while the timer
+    // owns the remaining logical resource. CPU checks catch an accidental spin.
+    CrawlOptions delayed; delayed.max_pages=100; delayed.retry.max_retries=20;
+    delayed.retry.jitter=false; delayed.retry.initial_backoff=delayed.retry.max_backoff=std::chrono::milliseconds{25};
+    const AsyncCrawler idle_crawler{1};
+    const auto cpu_started=std::clock(); const auto started=std::chrono::steady_clock::now();
+    const auto result=idle_crawler.crawl(*Url::parse(std::string{argv[1]}+"/idle/always500"),delayed);
+    const auto elapsed=std::chrono::duration<double>(std::chrono::steady_clock::now()-started).count();
+    const auto cpu=static_cast<double>(std::clock()-cpu_started)/CLOCKS_PER_SEC;
+    check(result.pages_attempted==21 && result.retries_exhausted==1 && result.resources_completed==1,"delayed-only work lost");
+    check(elapsed>=.45 && cpu<elapsed*.5+.02,"delayed-only loop busy-spins or wakes early");
+    std::cout<<"delayed-only: 20 wakeups, elapsed="<<elapsed<<" cpu="<<cpu<<'\n';
 } catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}

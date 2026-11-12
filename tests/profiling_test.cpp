@@ -23,7 +23,8 @@ int main(int argc, char* argv[])
         for (int engine = 0; engine != 3; ++engine) {
             fluxcrawl::HttpClientOptions http;
             http.use_environment_proxy = false;
-            http.connect_timeout = std::chrono::milliseconds{100};
+            // Parity is not a connection-timeout test; tolerate a loaded CI host.
+            http.connect_timeout = std::chrono::seconds{1};
             for (const auto path : {"/crawl/", "/crawl/failures"}) {
                 const auto seed = fluxcrawl::Url::parse(std::string{argv[1]} + path).value();
                 const auto crawl = [&](fluxcrawl::CrawlOptions options) {
