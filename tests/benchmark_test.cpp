@@ -69,7 +69,9 @@ int main(int argc, char* argv[])
     sample.metrics.bytes_per_second = 500;
     sample.metrics.latency = {100, 10ms, 20ms, 30ms, 15.5, 1ms, 40ms};
     sample.server_requests = 100; sample.server_peak_active = 1;
-    report.samples = {sample, {}};
+    report.samples.clear();
+    report.samples.push_back(sample);
+    report.samples.emplace_back(); // Explicit value initialization avoids GCC optional-copy diagnostics.
     std::ostringstream output;
     output.imbue(std::locale{std::locale::classic(), new CommaPunctuation});
     fluxcrawl::write_benchmark_csv(output, report);

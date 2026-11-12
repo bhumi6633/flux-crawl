@@ -216,7 +216,7 @@ HostScheduler::Sample HostScheduler::sample(Time now, std::size_t limit)
     if (!delayed_.empty()) { out.next_retry_ms = std::max(0.0, std::chrono::duration<double, std::milli>(delayed_.begin()->first-now).count()); }
     for (auto& [key, host] : hosts_) {
         if (out.candidates++ == 256) { --out.candidates; break; }
-        const auto origin = key.scheme + "://" + (key.host.find(':') != std::string::npos ? "[" + key.host + "]" : key.host) + ":" + std::to_string(key.effective_port);
+        const auto origin = key.scheme + "://" + key.host + ":" + std::to_string(key.effective_port);
         out.hosts.push_back({origin, host.pending + host.delayed, host.active, host.delayed, host.completed,
             std::max(0.0, std::chrono::duration<double, std::milli>(host.bucket.eligible_at(now)-now).count())});
     }

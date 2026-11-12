@@ -61,7 +61,15 @@ CrawlResult SequentialCrawler::crawl(const Url& seed, const CrawlOptions& option
         detail::reserve_attempt(result, item->item);
         observe();
         if (lock.owns_lock()) { lock.unlock(); }
-        auto page=detail::process_page(client_, std::move(item->item), options, profile);
+        auto page = [&] {
+            try { return detail::process_page(client_, std::move(item->item), options, profile); }
+            catch (...) {
+                // Lease destruction mutates scheduler gauges observed by the sampler.
+                if (options.observability) { lock.lock(); }
+                item.reset();
+                throw;
+            }
+        }();
         if (options.observability) { lock.lock(); }
         detail::publish_page(state, result, std::move(page), seed, options, scheduler, policy, profile);
         policy.schedule(state, scheduler, result, profile);

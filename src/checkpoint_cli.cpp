@@ -16,7 +16,7 @@ int checkpoint_resume_main(int argc, char* argv[])
         const auto restore_began=fluxcrawl::HostScheduler::Clock::now();
         const bool database = fluxcrawl::SqliteStore::is_database(argv[2]);
         auto saved = [&] {
-            if (database) { auto store=std::shared_ptr<fluxcrawl::SqliteStore>{fluxcrawl::SqliteStore::open(argv[2])}; auto saved=std::make_shared<fluxcrawl::CrawlCheckpoint>(store->load()); saved->opened_store=std::move(store); return saved; }
+            if (database) { auto store=std::shared_ptr<fluxcrawl::SqliteStore>{fluxcrawl::SqliteStore::open(argv[2])}; auto restored=std::make_shared<fluxcrawl::CrawlCheckpoint>(store->load()); restored->opened_store=std::move(store); return restored; }
             return std::make_shared<fluxcrawl::CrawlCheckpoint>(fluxcrawl::CheckpointManager::read(argv[2]));
         }();
         saved->restore_started_at=restore_began;
@@ -74,7 +74,9 @@ int checkpoint_resume_main(int argc, char* argv[])
         if (database) { fluxcrawl::detail::print_database_metrics(std::cout, result); }
         fluxcrawl::detail::print_dedup_metrics(std::cout, result, options.dedup);
         fluxcrawl::detail::print_pressure_metrics(std::cout, result, options.backpressure);
+        if (!result.persistence_errors.empty() || !result.checkpoint_errors.empty()) { return 3; }
         return result.persistence_errors.empty() && result.checkpoint_errors.empty() && result.robots_fetch_failures == 0 && result.terminal_fetch_failures == 0
             && (options.retry.max_retries == 0 || result.terminal_http_failures == 0) ? 0 : 1;
-    } catch (const std::exception& error) { std::cerr << "fluxcrawl resume: " << error.what() << '\n'; return 1; }
+    } catch (const std::invalid_argument& error) { std::cerr << "fluxcrawl resume: " << error.what() << '\n'; return 2; }
+    catch (const std::exception& error) { std::cerr << "fluxcrawl resume: " << error.what() << '\n'; return 3; }
 }

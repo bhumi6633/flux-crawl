@@ -50,7 +50,13 @@ public:
     void error(std::string message) noexcept;
     // Called after engine teardown on exceptional exit. Preserves last safe counters.
     void failed();
-    [[nodiscard]] std::shared_ptr<const ObservabilitySnapshot> latest() const { return std::atomic_load(&latest_); }
+    [[nodiscard]] std::shared_ptr<const ObservabilitySnapshot> latest() const { 
+#if defined(__cpp_lib_atomic_shared_ptr) && __cpp_lib_atomic_shared_ptr >= 201711L
+        return latest_.load();
+#else
+        return std::atomic_load(&latest_);
+#endif
+     }
     [[nodiscard]] std::chrono::milliseconds interval() const { return interval_; }
 private:
     std::chrono::milliseconds interval_;
@@ -67,6 +73,17 @@ private:
     std::vector<std::string> nodes_;
     std::set<std::pair<std::size_t, std::size_t>> edges_;
     std::deque<std::string> errors_;
+    void publish(std::shared_ptr<const ObservabilitySnapshot> value) {
+#if defined(__cpp_lib_atomic_shared_ptr) && __cpp_lib_atomic_shared_ptr >= 201711L
+        latest_.store(std::move(value));
+#else
+        std::atomic_store(&latest_,std::move(value));
+#endif
+    }
+#if defined(__cpp_lib_atomic_shared_ptr) && __cpp_lib_atomic_shared_ptr >= 201711L
+    std::atomic<std::shared_ptr<const ObservabilitySnapshot>> latest_;
+#else
     std::shared_ptr<const ObservabilitySnapshot> latest_;
+#endif
 };
 }

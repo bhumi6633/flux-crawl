@@ -25,7 +25,7 @@ CrawlCheckpoint CheckpointManager::read(const std::filesystem::path& path)
     return deserialize(text);
 }
 std::size_t CheckpointManager::write(const std::filesystem::path& path, const CrawlCheckpoint& checkpoint,
-                                     const std::function<void()>& before_replace)
+                                     const std::function<void()>& before_replace, const std::function<void()>& before_write)
 {
     if (checkpoint.spool_sync) { checkpoint.spool_sync->sync(); }
     const auto text = serialize(checkpoint); // Validate before creating anything.
@@ -45,6 +45,7 @@ std::size_t CheckpointManager::write(const std::filesystem::path& path, const Cr
     cleanup.file = std::fopen(temporary.string().c_str(), "wx"); // Exclusive creation, same directory.
     if (!cleanup.file) { throw std::runtime_error("Cannot create checkpoint temporary file: " + std::string{std::strerror(errno)}); }
     cleanup.owned = true;
+    if (before_write) { before_write(); }
     if (std::fwrite(text.data(), 1, text.size(), cleanup.file) != text.size() || std::fflush(cleanup.file) != 0) {
         throw std::runtime_error("Failed writing/flushing checkpoint: " + path.string());
     }

@@ -23,7 +23,7 @@ BloomFilter::BloomFilter(std::size_t expected, double probability) {
     bits_=std::max(std::size_t{64},static_cast<std::size_t>(required));
     const auto words=(bits_+63)/64;
     if(words>words_.max_size()) { throw std::length_error("Bloom allocation exceeds vector capacity"); }
-    probes_=std::max(std::size_t{1},static_cast<std::size_t>(std::round(static_cast<long double>(bits_)/expected*ln2)));
+    probes_=std::max(std::size_t{1},static_cast<std::size_t>(std::round(static_cast<long double>(bits_)/static_cast<long double>(expected)*ln2)));
     words_.assign(words,0);
 }
 std::uint64_t BloomFilter::hash(std::string_view bytes,std::uint64_t seed) {

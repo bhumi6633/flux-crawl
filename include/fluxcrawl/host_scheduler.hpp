@@ -24,8 +24,8 @@ struct RateLimit {
     std::size_t burst = 1;
 };
 struct SchedulingOptions {
-    std::optional<std::size_t> max_per_host;
-    std::optional<RateLimit> rate;
+    std::optional<std::size_t> max_per_host{};
+    std::optional<RateLimit> rate{};
 };
 
 // Explicit timestamps allow deterministic tests; callers supply monotonic time.

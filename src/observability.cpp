@@ -12,7 +12,7 @@ Observability::Observability(std::chrono::milliseconds interval, bool topology)
     if (interval < std::chrono::milliseconds{100} || interval > std::chrono::seconds{10}) {
         throw std::invalid_argument("metrics interval must be 100..10000 ms");
     }
-    std::atomic_store(&latest_,std::make_shared<const ObservabilitySnapshot>());
+    publish(std::make_shared<const ObservabilitySnapshot>());
 }
 void Observability::begin(std::string engine, std::size_t concurrency)
 {
@@ -31,7 +31,7 @@ void Observability::failed() {
     out->state="error"; out->active=0; ++out->sequence;
     out->errors.push_back("Crawler stopped after an exception; counters reflect last safe sample");
     out->elapsed_ms=std::chrono::duration<double,std::milli>(Clock::now()-started_).count();
-    std::atomic_store(&latest_,std::shared_ptr<const ObservabilitySnapshot>{std::move(out)});
+    publish(std::shared_ptr<const ObservabilitySnapshot>{std::move(out)});
 }
 void Observability::request_finished(const CrawlRecord& record) noexcept try
 {
@@ -107,6 +107,6 @@ void Observability::capture(const CrawlState& state, HostScheduler& scheduler, c
     for (const auto* errors : {&result.persistence_errors,&result.checkpoint_errors}) {
         for (auto i=errors->size()>4?errors->size()-4:0; i<errors->size(); ++i) { out->errors.push_back((*errors)[i].substr(0,160)); }
     }
-    std::atomic_store(&latest_,std::shared_ptr<const ObservabilitySnapshot>{std::move(out)});
+    publish(std::shared_ptr<const ObservabilitySnapshot>{std::move(out)});
 } catch (...) { /* Best-effort telemetry must not fail a crawl. */ }
 }
