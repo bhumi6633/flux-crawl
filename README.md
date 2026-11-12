@@ -16,7 +16,9 @@ No general performance ranking is claimed.
 Requires CMake 3.20 or newer, a C++20 compiler, and libcurl 7.85 or newer with
 development headers, plus libxml2 and SQLite 3.24+ development headers. On Debian/Ubuntu, install
 `libcurl4-openssl-dev libxml2-dev libsqlite3-dev`; the macOS Command Line Tools SDK
-provides these libraries. SQLite is discovered through CMake FindSQLite3.
+provides these libraries. SQLite is discovered through CMake FindSQLite3. The default optional dashboard
+server also needs Boost >= 1.81 with Boost.JSON; use
+`-DFLUXCRAWL_OBSERVABILITY=OFF` to omit that dependency.
 Python 3 is required when building tests (the default); no Python packages are
 needed. Use `-DBUILD_TESTING=OFF` for a library/CLI build without Python.
 URL operations remain local; HTTP fetches and crawler calls make requests.
@@ -1202,3 +1204,54 @@ flowchart TD
   N --> W
   W --> T[Atomic seen + work + counters commit]
 ```
+
+## Live Observability
+
+Enable a local, read-only systems dashboard with `--dashboard`. The React UI
+shows throughput, active requests, pending/deferred work, recent latency,
+host activity, retry/robots state, backpressure, dedup/Bloom and storage metrics.
+An optional bounded origin-discovery graph uses `--dashboard-topology`.
+
+The default C++ build now requires Boost >= 1.81 with Beast/Asio and Boost.JSON.
+Install its development package or configure `-DFLUXCRAWL_OBSERVABILITY=OFF` to
+build the crawler without the server or Boost. Frontend compilation is separate:
+
+```sh
+cd dashboard
+npm ci
+npm run build
+cd ..
+./build/fluxcrawl --engine async --concurrency 32 --max-per-host 4 \
+  --dashboard --dashboard-port 8080 --metrics-interval-ms 500 \
+  --dashboard-topology https://example.test/
+```
+
+Open the printed `http://127.0.0.1:8080` address. Node is not needed at runtime.
+The server serves the built `dashboard/dist` assets; a missing build returns
+instructions while the API remains available. `--dashboard-port 0` selects and
+prints a free local port. `--dashboard-linger-ms` defaults to 2000, allowing the
+final snapshot to reach clients before normal process exit (maximum 60000 ms).
+Without `--dashboard`, no server, sampler, or topology collector is created.
+These CLI flags currently apply to fresh crawls.
+
+Engines publish immutable snapshots, sampled every 500 ms by default; the server
+never inspects live scheduler containers. REST (`/api/status`, `/api/metrics`,
+`/api/hosts`, `/api/topology`) and WebSocket (`/ws`) share schema version 1. One
+serialized snapshot is reused across clients. Slow clients skip stale telemetry
+and disconnect on a bounded write deadline; they cannot hold a crawler lock.
+The UI retains only five minutes of chart history and reconnects with backoff.
+Telemetry is **sampled, bounded, and best-effort**, separate from profiling and
+crawler correctness. Host sampling scans at most 256 candidates and returns 32
+rows; optional topology retains at most 64 origins and 128 edges. This is a local
+observatory, with loopback-only binding, same-origin requests, and read-only APIs.
+
+Run a deterministic, temporary-state demo with varied origin delays, retries,
+robots blocks, pressure, Bloom and SQLite (approximately 30–90 seconds; outside CI):
+
+```sh
+python3 tools/dashboard_demo.py --binary ./build-release/fluxcrawl
+```
+
+See [architecture, API and metric semantics](docs/observability.md) and
+[measured overhead and validation results](docs/observability-validation.md).
+Measurements are workload-specific; no universal overhead percentage is claimed.
