@@ -153,6 +153,8 @@ int benchmark_main(int argc, char* argv[])
         csv.write(report);
         fluxcrawl::write_benchmark_table(std::cout, report);
         return 0;
+    } catch (const std::invalid_argument& error) {
+        std::cerr << "fluxcrawl benchmark: " << error.what() << '\n'; return 2;
     } catch (const std::exception& error) {
         std::cerr << "fluxcrawl benchmark: " << error.what() << '\n';
         return 1;

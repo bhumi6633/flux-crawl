@@ -85,7 +85,7 @@ def main():
                                  ["--scenario", "latency-bound"], ["--runs", "10001"])
                 for arguments in invalid_cases:
                     failed = subprocess.run(cli + list(arguments), capture_output=True, text=True, env=environment, timeout=10)
-                    assert failed.returncode == 1, arguments
+                    assert failed.returncode == (1 if arguments[0]=="--output" else 2), (arguments,failed.stderr)
                 # Valid counts alone are insufficient: a missing link must invalidate a trial.
                 original_children = server.workload.children
                 server.workload.children = lambda page: [child for child in original_children(page) if child != 9]
